@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SourceProof — Logo options</title>
+  <link rel="icon" href="/demo/logo.svg" type="image/svg+xml" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/demo/styles.css" />
+  <style>
+    .picker-shell { max-width: 920px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
+    .picker-head { margin-bottom: 2rem; }
+    .picker-head h1 { margin: 0 0 0.5rem; font-size: 1.35rem; font-weight: 600; }
+    .picker-head p { margin: 0; color: var(--text-secondary); font-size: 0.9rem; max-width: 52ch; }
+    .picker-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+    .picker-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .picker-card:hover {
+      border-color: var(--border-strong);
+      box-shadow: var(--shadow-md);
+    }
+    .picker-card.is-current {
+      border-color: var(--teal);
+      box-shadow: 0 0 0 1px var(--teal);
+    }
+    .picker-preview {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 1rem;
+      background: var(--surface-raised);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+    }
+    .picker-preview img { width: 48px; height: 48px; }
+    .picker-preview--bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0.65rem 1rem;
+      border-radius: var(--radius) var(--radius) 0 0;
+    }
+    .picker-preview--bar img { width: 32px; height: 32px; }
+    .picker-meta h3 { margin: 0; font-size: 0.95rem; font-weight: 600; }
+    .picker-meta p { margin: 0.35rem 0 0; font-size: 0.8rem; color: var(--text-tertiary); line-height: 1.45; }
+    .picker-tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--teal);
+      margin-bottom: 0.35rem;
+    }
+    .picker-tag--current { color: var(--ok); }
+    .picker-path {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--text-tertiary);
+      word-break: break-all;
+    }
+    .back-link {
+      display: inline-block;
+      margin-bottom: 1.5rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      text-decoration: none;
+    }
+    .back-link:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/demo/">
+      <img src="/demo/logo.svg" alt="" class="brand-mark" />
+      <span class="brand-name">SourceProof</span>
+    </a>
+    <nav class="topbar-nav">
+      <a class="topbar-link" href="/demo/">App</a>
+      <a class="topbar-link" href="/docs" target="_blank" rel="noopener">API reference</a>
+    </nav>
+  </header>
+
+  <div class="picker-shell">
+    <a class="back-link" href="/demo/">← Back to app</a>
+    <div class="picker-head">
+      <h1>Logo options</h1>
+      <p>
+        Six marks for SourceProof (Soroban source ↔ on-chain Wasm verification).
+        Pick one and tell us the number — we’ll set it as <code>demo/ui/logo.svg</code> and the API docs favicon.
+      </p>
+    </div>
+
+    <div class="picker-grid" id="logo-grid"></div>
+  </div>
+
+  <script>
+    const options = [
+      {
+        id: "01",
+        file: "01-verified-doc.svg",
+        name: "Verified document",
+        desc: "Source file with a proof badge. Reads clearly at 16–32px.",
+        current: false,
+      },
+      {
+        id: "02",
+        file: "02-hash-match.svg",
+        name: "Hash match",
+        desc: "Two blocks linked by a match point — source vs on-chain Wasm.",
+        current: true,
+      },
+      {
+        id: "03",
+        file: "03-bracket-proof.svg",
+        name: "Bracket proof",
+        desc: "Code brackets with a check — developer-first, minimal.",
+      },
+      {
+        id: "04",
+        file: "04-audit-seal.svg",
+        name: "Audit seal",
+        desc: "Verification stamp — trust and compliance tone.",
+      },
+      {
+        id: "05",
+        file: "05-stack-align.svg",
+        name: "Stack align",
+        desc: "Aligned layers — tarball rebuild matching ledger bytes.",
+      },
+      {
+        id: "06",
+        file: "06-monogram-sp.svg",
+        name: "SP monogram",
+        desc: "Lettermark with teal accent — brandable, app-icon style.",
+      },
+    ];
+
+    const grid = document.getElementById("logo-grid");
+    grid.innerHTML = options
+      .map(
+        (o) => `
+      <article class="picker-card${o.current ? " is-current" : ""}" data-id="${o.id}">
+        <div class="picker-preview picker-preview--bar">
+          <img src="/demo/logos/${o.file}" alt="" width="32" height="32" />
+          <span class="brand-name" style="font-family: var(--sans); font-size: 1.05rem;">SourceProof</span>
+        </div>
+        <div class="picker-preview">
+          <img src="/demo/logos/${o.file}" alt="" width="48" height="48" />
+          <div class="picker-meta">
+            ${o.current ? '<span class="picker-tag picker-tag--current">Current default</span>' : `<span class="picker-tag">Option ${o.id}</span>`}
+            <h3>${o.name}</h3>
+            <p>${o.desc}</p>
+          </div>
+        </div>
+        <p class="picker-path">demo/ui/logos/${o.file}</p>
+      </article>`
+      )
+      .join("");
+  </script>
+</body>
+</html>

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SourceProof</title>
+  <link rel="icon" href="/demo/logo.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/demo/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/demo/">
+      <img src="/demo/logo.svg" alt="" class="brand-mark" />
+      <span class="brand-name">SourceProof</span>
+    </a>
+    <nav class="topbar-nav">
+      <span id="api-status" class="status-chip status-chip--loading">API</span>
+      <a class="topbar-link" href="/docs" target="_blank" rel="noopener">API reference</a>
+    </nav>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <p class="sidebar-lead">
+        Verify that a Soroban contract’s on-chain Wasm was built from a specific source tree.
+      </p>
+      <ol class="steps">
+        <li><span>Submit</span> source (tarball, GitHub, or URL)</li>
+        <li><span>Rebuild</span> in a pinned builder image</li>
+        <li><span>Compare</span> digest to ledger bytecode</li>
+      </ol>
+      <div class="trust-note">
+        <span class="trust-label">Trust level</span>
+        <code>sep58_rebuild</code>
+        <p class="trust-desc">Byte-for-byte rebuild match in an SDF-allowlisted image. Distinct from (and recorded separately to) <code>sep55_attestation</code> CI provenance.</p>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <section class="panel">
+        <header class="panel-head">
+          <h2>New verification</h2>
+        </header>
+        <p class="panel-desc">Provide a contract identifier and source archive. Verification runs asynchronously.</p>
+
+        <div class="seg-control" role="tablist">
+          <button type="button" class="seg seg-active" data-tab="upload" role="tab" aria-selected="true">Upload</button>
+          <button type="button" class="seg" data-tab="github" role="tab">GitHub</button>
+          <button type="button" class="seg" data-tab="hosted" role="tab">URL / IPFS</button>
+          <button type="button" class="seg" data-tab="hash" role="tab">Hash only</button>
+        </div>
+
+        <form id="submit-form" class="form">
+          <div class="field-grid">
+            <label class="field">
+              <span class="field-label">Network</span>
+              <select name="network" required>
+                <option value="testnet">testnet</option>
+                <option value="mainnet">mainnet</option>
+                <option value="futurenet">futurenet</option>
+              </select>
+            </label>
+            <label class="field field-span">
+              <span class="field-label">Contract ID</span>
+              <input name="contract_id" type="text" placeholder="C…" spellcheck="false" autocomplete="off" />
+            </label>
+          </div>
+          <label class="field">
+            <span class="field-label">Wasm hash <span class="optional">optional if contract ID provided</span></span>
+            <input name="wasm_hash" type="text" class="mono-input" placeholder="sha256 hex (64 characters)" spellcheck="false" autocomplete="off" />
+          </label>
+
+          <div class="tab-panel" data-panel="upload">
+            <div class="field">
+              <span class="field-label">Source</span>
+              <div id="file-drop-zone" class="file-drop" tabindex="0" role="group" aria-label="Source upload">
+                <input id="source-file" name="source" type="file" multiple accept=".tgz,.rs,.toml,.lock,application/gzip,text/plain" />
+                <input id="source-folder" type="file" webkitdirectory directory multiple hidden />
+                <div class="file-drop-inner">
+                  <button type="button" class="btn btn-secondary btn-sm" id="source-file-btn">Choose files</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="source-folder-btn">Choose folder</button>
+                  <span class="file-drop-text" id="file-drop-text">.tar.gz, .tgz, or project sources (.rs, Cargo.toml, …)</span>
+                </div>
+              </div>
+              <p class="field-note">Tarballs work as-is. <strong>Choose folder</strong> lets you pick a contract project directly (e.g. <code>examples/demo-contract</code>) — the project root, <code>Cargo.toml</code>, and lockfile are packed for you, while <code>target/</code> and <code>.git/</code> are excluded. After verification the exact source is downloadable and browsable below.</p>
+            </div>
+          </div>
+
+          <div class="tab-panel hidden" data-panel="github">
+            <div class="field-grid">
+              <label class="field field-span">
+                <span class="field-label">Repository URL</span>
+                <input name="github_url" type="url" placeholder="https://github.com/owner/repo" />
+              </label>
+              <label class="field">
+                <span class="field-label">Ref</span>
+                <input name="git_ref" type="text" placeholder="commit, tag, or HEAD" />
+              </label>
+            </div>
+            <p class="field-note">Snapshot is pinned at submit time; the live repo is never read during rebuild.</p>
+          </div>
+
+          <div class="tab-panel hidden" data-panel="hosted">
+            <label class="field">
+              <span class="field-label">Tarball URL</span>
+              <input name="tarball_url" type="url" placeholder="https://… or ipfs://…" />
+            </label>
+            <label class="field">
+              <span class="field-label">Expected SHA-256</span>
+              <input name="tarball_sha256" type="text" class="mono-input" placeholder="sha256:… or hex" />
+            </label>
+            <p class="field-note">Downloaded bytes must match the hash before the build starts. The fetched source is then stored, so it stays downloadable and browsable even if the URL or IPFS pin disappears.</p>
+          </div>
+
+          <div class="tab-panel hidden" data-panel="hash">
+            <label class="field">
+              <span class="field-label">Tarball SHA-256</span>
+              <input name="tarball_sha256" type="text" class="mono-input" placeholder="sha256:… or hex" />
+            </label>
+            <p class="field-note">Hash-only re-verifies source that was <strong>already uploaded</strong> (its bytes live in the content store). If the hash is unknown the request is rejected with a clear message — there is nothing to fetch from a bare hash. When found, the original source is fully downloadable and browsable in the result.</p>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Submit for verification</button>
+          </div>
+        </form>
+        <div id="submit-result" class="result hidden" role="status"></div>
+      </section>
+
+      <section class="panel panel-compact">
+        <header class="panel-head">
+          <h2>Contract lookup</h2>
+        </header>
+        <form id="lookup-form" class="lookup-row">
+          <select name="network" aria-label="Network">
+            <option value="testnet">testnet</option>
+            <option value="mainnet">mainnet</option>
+          </select>
+          <input name="contract_id" type="text" placeholder="Contract ID" required spellcheck="false" autocomplete="off" />
+          <button type="submit" class="btn">Look up</button>
+        </form>
+        <p class="lookup-hint">
+          Want to see multi-verifier divergence?
+          <button type="button" id="lookup-sample" class="link-quiet">Load the divergence sample</button>
+        </p>
+        <div id="lookup-result" class="result hidden" role="status"></div>
+      </section>
+    </div>
+
+    <section class="panel panel-registry">
+      <header class="panel-head panel-head--split">
+        <div>
+          <h2>Verification registry</h2>
+          <p class="panel-desc panel-desc--tight">Local instance · newest first</p>
+        </div>
+        <button id="refresh-registry" type="button" class="btn btn-secondary">Refresh</button>
+      </header>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Network</th>
+              <th>Contract</th>
+              <th>Wasm</th>
+              <th>Origin</th>
+              <th>Builder</th>
+              <th>Verified</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="registry-body">
+            <tr><td colspan="8" class="table-empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <footer class="site-footer">
+    <span>SourceProof · Soroban source verification</span>
+    <span class="footer-dot">·</span>
+    <a href="/demo/logos.html">Logo options</a>
+  </footer>
+
+  <script type="module" src="/demo/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+name: sourceproof
+
+services:
+  # Build-only image for contract rebuilds (not started with `make start`).
+  # Run: docker compose build builder   OR   make builder
+  builder:
+    build:
+      context: ./builder
+      dockerfile: Dockerfile
+    image: soroban-verify-builder:local
+    profiles: ["builder"]
+    entrypoint: ["true"]
+
+  pglite:
+    build:
+      context: ./demo/pglite
+      dockerfile: Dockerfile
+    image: soroban-verify-pglite:local
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/pglite:/data/pglite
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const n=require('net');const s=n.connect(5432,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: soroban-verify-api:local
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@pglite:5432/postgres
+      STORAGE_DIR: /app/data/sources
+      BUILDER_IMAGE: soroban-verify-builder:local
+      VERIFIER_INSTANCE_ID: local-verifier-1
+      # Demo: seed one sample contract with two divergent verifier records so the
+      # multi-verifier divergence panel is demonstrable. Use the "Load the
+      # divergence sample" button in the Lookup panel to view it.
+      SEED_DEMO_DIVERGENCE: "true"
+      # Demo: allow the build container network so cargo can fetch crates.
+      # (Determinism comes from Cargo.lock + pinned toolchain, not isolation.)
+      BUILDER_NETWORK_DISABLED: "false"
+      # Host path that maps to the data volume, so builds can be bind-mounted into
+      # the builder container via the host Docker daemon (docker-out-of-docker).
+      CONTAINER_DATA_ROOT: /app/data
+      HOST_DATA_DIR: ${HOST_DATA_DIR:-${PWD}/data}
+    volumes:
+      - ./data:/app/data
+      - ./demo/ui:/app/demo/ui:ro
+      # Host Docker socket (auto-detected by scripts/start.sh; defaults to the
+      # standard path for Linux/CI/production).
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+    depends_on:
+      pglite:
+        condition: service_healthy

@@ -1,0 +1,49 @@
+# Fast demo: API + UI only (SQLite). No PGlite, no builder compile.
+# Usage: make start-fast
+name: sourceproof
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: soroban-verify-api:local
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    ports:
+      - "127.0.0.1:8080:8080"
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--proxy-headers",
+        "--forwarded-allow-ips",
+        "*",
+      ]
+    environment:
+      DATABASE_URL: sqlite:////app/data/verify.db
+      STORAGE_DIR: /app/data/sources
+      BUILDER_IMAGE: soroban-verify-builder:local
+      VERIFIER_INSTANCE_ID: local-verifier-fast
+      # Demo: seed one sample contract with two divergent verifier records so the
+      # multi-verifier divergence panel is demonstrable. Use the "Load the
+      # divergence sample" button in the Lookup panel to view it.
+      SEED_DEMO_DIVERGENCE: "true"
+      # Demo: allow the build container network so cargo can fetch crates.
+      # (Determinism comes from Cargo.lock + pinned toolchain, not isolation.)
+      BUILDER_NETWORK_DISABLED: "false"
+      # Host path that maps to /app/data, so builds can be bind-mounted into the
+      # builder container via the host Docker daemon (docker-out-of-docker).
+      CONTAINER_DATA_ROOT: /app/data
+      HOST_DATA_DIR: ${HOST_DATA_DIR:-${PWD}/data}
+    volumes:
+      - ./data:/app/data
+      - ./demo/ui:/app/demo/ui:ro
+      # Host Docker socket (auto-detected by scripts/start.sh; defaults to the
+      # standard path for Linux/CI/production).
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock

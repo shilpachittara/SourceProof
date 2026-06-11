@@ -1,0 +1,62 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-sourceproof-production
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt
+
+      - name: Run unit tests
+        run: |
+          cd api && pytest -v \
+            tests/test_storage.py \
+            tests/test_allowlist.py \
+            tests/test_sources_modes.py \
+            tests/test_rpc.py
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script_stop: true
+          command_timeout: 45m
+          script: |
+            set -euo pipefail
+            DEPLOY_PATH="${{ secrets.EC2_DEPLOY_PATH }}"
+            if [[ -z "$DEPLOY_PATH" ]]; then
+              DEPLOY_PATH="$HOME/SourceProof"
+            fi
+            if [[ ! -d "$DEPLOY_PATH/.git" ]]; then
+              echo "ERROR: $DEPLOY_PATH is not a git repo. Run deploy/ec2/bootstrap-server.sh on EC2 first."
+              exit 1
+            fi
+            cd "$DEPLOY_PATH"
+            git fetch origin main
+            git reset --hard origin/main
+            chmod +x scripts/*.sh deploy/ec2/*.sh 2>/dev/null || true
+            ./deploy/ec2/remote-deploy.sh

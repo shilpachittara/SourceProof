@@ -1,0 +1,18 @@
+# Keep API build context small — speeds up every `make start`
+.git
+.github
+data/
+tmp/
+tmp-out/
+api/.venv
+api/api/.venv
+api/.pytest_cache
+**/__pycache__
+**/*.pyc
+*.md
+docs/
+examples/hello-world/target/
+scripts/testnet/
+.env
+.env.*
+!.env.example

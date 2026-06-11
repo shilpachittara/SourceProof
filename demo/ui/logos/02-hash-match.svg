@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Option 2: Hash match">
+  <rect width="32" height="32" rx="7" fill="#1e2a3b"/>
+  <rect x="7" y="10" width="7" height="12" rx="1.5" fill="none" stroke="#f4f3f0" stroke-width="1.25"/>
+  <path d="M8.5 13h4M8.5 15.5h4M8.5 18h2.5" stroke="#b8b4ab" stroke-width="1" stroke-linecap="round"/>
+  <rect x="18" y="10" width="7" height="12" rx="1.5" fill="none" stroke="#4a8f7c" stroke-width="1.25"/>
+  <path d="M19.5 14h4M19.5 16.5h3M19.5 19h2" stroke="#7eb8a8" stroke-width="1" stroke-linecap="round"/>
+  <path d="M14.5 16h3" stroke="#4a8f7c" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="16" cy="16" r="1.1" fill="#4a8f7c"/>
+</svg>

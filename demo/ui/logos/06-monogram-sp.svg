@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Option 6: SP monogram">
+  <rect width="32" height="32" rx="7" fill="#1e2a3b"/>
+  <path d="M10.5 10.5v11" stroke="#f4f3f0" stroke-width="2" stroke-linecap="round"/>
+  <path d="M10.5 10.5h5.5c2.2 0 3.5 1.2 3.5 2.8 0 1.4-.9 2.4-2.2 2.6 1.5.2 2.7 1.4 2.7 3.1 0 2-1.8 3.5-4.2 3.5H10.5" fill="none" stroke="#f4f3f0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M19.5 22.5l3-6.5 3 6.5" fill="none" stroke="#4a8f7c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M20.2 20.8h4.6" stroke="#4a8f7c" stroke-width="2" stroke-linecap="round"/>
+</svg>
