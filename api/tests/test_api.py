@@ -57,7 +57,12 @@ def test_submit_rejects_invalid_tarball(client: TestClient) -> None:
 
 
 def test_full_verification_flow_verified(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_build(source_dir: Path, output_dir: Path, image: str | None = None) -> BuildResult:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
             wasm_hash=WASM_HASH_A,
@@ -107,7 +112,12 @@ def test_full_verification_flow_verified(client: TestClient, monkeypatch: pytest
 
 
 def test_full_verification_flow_mismatch(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_build(source_dir: Path, output_dir: Path, image: str | None = None) -> BuildResult:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm-other",
             wasm_hash=WASM_HASH_B,
@@ -161,7 +171,7 @@ def test_verification_not_found(client: TestClient) -> None:
 def test_list_verifications(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.builder import BuildResult
 
-    def fake_build(source_dir, output_dir, image=None):
+    def fake_build(source_dir, output_dir, image=None, bldopt=None):
         return BuildResult(
             wasm_bytes=b"\x00asm",
             wasm_hash=WASM_HASH_A,
@@ -187,7 +197,12 @@ def test_list_verifications(client: TestClient, monkeypatch: pytest.MonkeyPatch)
 def _verify_contract(client: TestClient, monkeypatch: pytest.MonkeyPatch, wasm_bytes: bytes, contract_id: str) -> str:
     wasm_hash = hashlib.sha256(wasm_bytes).hexdigest()
 
-    def fake_build(source_dir: Path, output_dir: Path, image: str | None = None) -> BuildResult:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
         return BuildResult(
             wasm_bytes=wasm_bytes,
             wasm_hash=wasm_hash,
@@ -234,7 +249,12 @@ def test_freshness_superseded(client: TestClient, monkeypatch: pytest.MonkeyPatc
 def test_verified_record_exposes_build_image(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.config import settings
 
-    def fake_build(source_dir: Path, output_dir: Path, image: str | None = None) -> BuildResult:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
             wasm_hash=WASM_HASH_A,
@@ -256,7 +276,12 @@ def test_verified_record_exposes_build_image(client: TestClient, monkeypatch: py
 
 
 def test_content_addressed_submission(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_build(source_dir: Path, output_dir: Path, image: str | None = None) -> BuildResult:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
             wasm_hash=WASM_HASH_A,
@@ -312,7 +337,12 @@ def test_hosted_tarball_submission(client: TestClient, monkeypatch: pytest.Monke
 
     monkeypatch.setattr("app.main.fetch_hosted_tarball", fake_hosted)
 
-    def fake_build(source_dir: Path, output_dir: Path, image: str | None = None) -> BuildResult:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
         return BuildResult(wasm_bytes=b"\x00asm", wasm_hash=WASM_HASH_A, build_metadata={"docker_image": "test"})
 
     monkeypatch.setattr("app.worker.build_contract", fake_build)
@@ -346,7 +376,12 @@ def test_github_input_snapshots_to_tarball(client: TestClient, monkeypatch: pyte
 
     monkeypatch.setattr("app.main.fetch_from_github", fake_github)
 
-    def fake_build(source_dir: Path, output_dir: Path, image: str | None = None) -> BuildResult:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
             wasm_hash=WASM_HASH_A,
@@ -374,3 +409,136 @@ def test_github_input_snapshots_to_tarball(client: TestClient, monkeypatch: pyte
     assert result["source"]["origin"] == "github"
     assert result["source"]["repo_url"] == "https://github.com/example/demo"
     assert result["source"]["commit_sha"] == "a" * 40
+
+
+def test_submit_rejects_oversized_tarball(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.config.settings.max_tarball_bytes", 32)
+    tarball = make_source_tarball()
+    response = client.post(
+        "/v1/verify",
+        data={"network": "testnet", "wasm_hash": WASM_HASH_A},
+        files={"source": ("source.tar.gz", tarball, "application/gzip")},
+    )
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "tarball_too_large"
+
+
+def test_trust_fields_on_verified_record(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.config import settings
+
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
+        return BuildResult(
+            wasm_bytes=b"\x00asm",
+            wasm_hash=WASM_HASH_A,
+            build_metadata={
+                "docker_image": settings.builder_image,
+                "docker_image_digest": "local",
+                "applied_bldopt": bldopt,
+            },
+        )
+
+    monkeypatch.setattr("app.worker.build_contract", fake_build)
+
+    tarball = make_source_tarball()
+    submit = client.post(
+        "/v1/verify",
+        data={
+            "network": "testnet",
+            "wasm_hash": WASM_HASH_A,
+            "contract_id": "CTRUST1",
+            "bldopt": "--package counter",
+        },
+        files={"source": ("source.tar.gz", tarball, "application/gzip")},
+    )
+    verification_id = submit.json()["verification_id"]
+    payload = client.get(f"/v1/verifications/{verification_id}").json()
+    assert payload["metadata_source"] == "supplied"
+    assert payload["image_trust"] in {"sdf", "allowlisted"}
+    assert payload["source_identity"]["package"] == "counter"
+
+
+def test_contract_id_only_auto_resolve(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.sources import FetchedSource
+
+    tarball = make_source_tarball()
+
+    async def fake_fetch_hash(network: str, contract_id: str | None, wasm_hash: str | None):
+        return WASM_HASH_A, b"\x00asm-meta"
+
+    def fake_parse(_wasm: bytes) -> dict[str, str]:
+        return {
+            "source_repo": "https://github.com/example/onchain-contract",
+            "source_rev": "deadbeef" * 5,
+            "bldopt": "--package token",
+        }
+
+    async def fake_github(repo_url: str, ref: str) -> FetchedSource:
+        return FetchedSource(
+            tarball_bytes=tarball,
+            origin="github",
+            repo_url=repo_url,
+            commit_sha=ref,
+        )
+
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
+        return BuildResult(
+            wasm_bytes=b"\x00asm",
+            wasm_hash=WASM_HASH_A,
+            build_metadata={"docker_image": "test", "applied_bldopt": bldopt},
+        )
+
+    monkeypatch.setattr("app.main.fetch_wasm_hash", fake_fetch_hash)
+    monkeypatch.setattr("app.main.parse_wasm_metadata", fake_parse)
+    monkeypatch.setattr("app.main.fetch_from_github", fake_github)
+    monkeypatch.setattr("app.worker.build_contract", fake_build)
+
+    submit = client.post(
+        "/v1/verify",
+        data={"network": "testnet", "contract_id": "CAUTO1"},
+    )
+    assert submit.status_code == 202
+    body = submit.json()
+    assert body["source_origin"] == "github"
+
+    record = client.get(f"/v1/verifications/{body['verification_id']}").json()
+    assert record["metadata_source"] == "onchain"
+    assert record["source_identity"]["package"] == "token"
+
+
+def test_wasms_json_canonical_lookup(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
+        return BuildResult(
+            wasm_bytes=b"\x00asm",
+            wasm_hash=WASM_HASH_A,
+            build_metadata={"docker_image": "test"},
+        )
+
+    monkeypatch.setattr("app.worker.build_contract", fake_build)
+
+    tarball = make_source_tarball()
+    client.post(
+        "/v1/verify",
+        data={"network": "testnet", "wasm_hash": WASM_HASH_A, "contract_id": "CWASM1"},
+        files={"source": ("source.tar.gz", tarball, "application/gzip")},
+    )
+
+    native = client.get(f"/v1/wasm/{WASM_HASH_A}")
+    sep = client.get(f"/wasms/{WASM_HASH_A}.json")
+    assert native.status_code == 200
+    assert sep.status_code == 200
+    assert sep.json()["wasm_hash"] == native.json()["wasm_hash"]

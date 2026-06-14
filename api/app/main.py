@@ -37,12 +37,19 @@ from app.sources import (
 )
 from app.storage import (
     TarballError,
+    TarballTooLargeError,
     list_tarball_entries,
     read_source_tarball,
     validate_and_store_tarball,
     validate_content_hash,
 )
-from app.wasm_meta import declared_build_image, parse_wasm_metadata
+from app.wasm_meta import (
+    declared_bldopt,
+    declared_build_image,
+    declared_source_repo,
+    declared_source_rev,
+    parse_wasm_metadata,
+)
 from app import allowlist
 from app.worker import run_verification_task
 
@@ -239,8 +246,56 @@ async def submit_verification(
     source_origin = "upload"
     source_repo = None
     source_commit = None
+    tarball_bytes: bytes | None = None
+    onchain_wasm: bytes | None = None
+    expected_hash: str | None = None
+    onchain_meta: dict[str, str] = {}
 
-    if github_url:
+    has_explicit_source = bool(
+        github_url or tarball_url or source is not None or tarball_sha256
+    )
+
+    if not has_explicit_source:
+        if not contract_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide a source input or contract_id with on-chain source_repo metadata",
+            )
+        try:
+            expected_hash, onchain_wasm = await fetch_wasm_hash(network, contract_id, wasm_hash)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RpcError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Cannot reach Soroban RPC for {network}: {exc}",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        onchain_meta = parse_wasm_metadata(onchain_wasm)
+        auto_repo = declared_source_repo(onchain_meta)
+        auto_rev = declared_source_rev(onchain_meta) or "HEAD"
+        if not auto_repo:
+            raise HTTPException(
+                status_code=400,
+                detail="No source input and contract Wasm has no on-chain source_repo pointer",
+            )
+        try:
+            fetched = await fetch_from_github(auto_repo, auto_rev)
+        except SourceFetchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"GitHub fetch failed: {exc}") from exc
+        tarball_bytes = fetched.tarball_bytes
+        source_origin = fetched.origin
+        source_repo = fetched.repo_url
+        source_commit = fetched.commit_sha
+        if not bldopt:
+            bldopt = declared_bldopt(onchain_meta)
+    elif github_url:
         try:
             fetched = await fetch_from_github(github_url, git_ref)
         except SourceFetchError as exc:
@@ -270,35 +325,43 @@ async def submit_verification(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         tarball_bytes = fetched.tarball_bytes
         source_origin = fetched.origin
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide a source tarball, github_url, tarball_url, or tarball_sha256",
-        )
+
+    assert tarball_bytes is not None
 
     try:
         content_hash, stored_path = validate_and_store_tarball(tarball_bytes)
+    except TarballTooLargeError as exc:
+        raise HTTPException(
+            status_code=413,
+            detail={"code": "tarball_too_large", "message": str(exc)},
+        ) from exc
     except TarballError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    try:
-        expected_hash, onchain_wasm = await fetch_wasm_hash(network, contract_id, wasm_hash)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RpcError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Cannot reach Soroban RPC for {network}: {exc}",
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if expected_hash is None or onchain_wasm is None:
+        try:
+            expected_hash, onchain_wasm = await fetch_wasm_hash(network, contract_id, wasm_hash)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RpcError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Cannot reach Soroban RPC for {network}: {exc}",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        onchain_meta = parse_wasm_metadata(onchain_wasm)
+    elif not onchain_meta:
+        onchain_meta = parse_wasm_metadata(onchain_wasm)
+
+    if not bldopt:
+        bldopt = declared_bldopt(onchain_meta)
 
     # Read the toolchain metadata the deployer embedded in the on-chain Wasm
     # (rustc / soroban-sdk versions, and any SEP-58 `bldimg`). This both explains
     # mismatches and lets us honor a declared, allowlisted builder image.
-    onchain_meta = parse_wasm_metadata(onchain_wasm)
     declared_image = declared_build_image(onchain_meta)
     if declared_image and allowlist.is_allowed(declared_image):
         chosen_image = declared_image
@@ -400,12 +463,24 @@ async def get_contract_verification(
     }
 
 
-@app.get("/v1/wasm/{wasm_hash}")
-async def get_wasm_verification(
-    wasm_hash: str,
+def _wasm_lookup_payload(
+    normalized: str,
+    all_records: list[Verification],
     request: Request,
-    db: Session = Depends(get_db),
 ) -> dict:
+    verified = [r for r in all_records if r.status == VerificationStatus.VERIFIED.value]
+    verifications = [serialize_verification(record, base_url(request)) for record in verified]
+    multi = aggregate_verifiers(all_records, current_wasm_hash=normalized)
+    return {
+        "wasm_hash": normalized,
+        "consensus": multi["consensus"],
+        "verifier_count": multi["verifier_count"],
+        "verifiers": multi["verifiers"],
+        "verifications": verifications,
+    }
+
+
+async def _lookup_by_wasm_hash(wasm_hash: str, request: Request, db: Session) -> dict:
     try:
         normalized = normalize_hash(wasm_hash)
     except ValueError as exc:
@@ -420,16 +495,26 @@ async def get_wasm_verification(
     if not all_records:
         raise HTTPException(status_code=404, detail="No verification on record for this wasm hash")
 
-    verified = [r for r in all_records if r.status == VerificationStatus.VERIFIED.value]
-    verifications = [serialize_verification(record, base_url(request)) for record in verified]
-    multi = aggregate_verifiers(all_records, current_wasm_hash=normalized)
-    return {
-        "wasm_hash": normalized,
-        "consensus": multi["consensus"],
-        "verifier_count": multi["verifier_count"],
-        "verifiers": multi["verifiers"],
-        "verifications": verifications,
-    }
+    return _wasm_lookup_payload(normalized, all_records, request)
+
+
+@app.get("/v1/wasm/{wasm_hash}")
+async def get_wasm_verification(
+    wasm_hash: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    return await _lookup_by_wasm_hash(wasm_hash, request, db)
+
+
+@app.get("/wasms/{wasm_hash}.json")
+async def get_wasm_verification_sep(
+    wasm_hash: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Verifier-API SEP canonical lookup path (alias of GET /v1/wasm/{hash})."""
+    return await _lookup_by_wasm_hash(wasm_hash, request, db)
 
 
 @app.get("/v1/source/{content_hash}/files")

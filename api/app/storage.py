@@ -17,6 +17,10 @@ class TarballError(ValueError):
     pass
 
 
+class TarballTooLargeError(TarballError):
+    """Raised when an upload exceeds settings.max_tarball_bytes."""
+
+
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -32,7 +36,9 @@ def validate_and_store_tarball(data: bytes) -> tuple[str, Path]:
     if len(data) == 0:
         raise TarballError("Empty tarball upload")
     if len(data) > settings.max_tarball_bytes:
-        raise TarballError(f"Tarball exceeds {settings.max_tarball_bytes} byte limit")
+        raise TarballTooLargeError(
+            f"Tarball exceeds {settings.max_tarball_bytes} byte limit"
+        )
 
     _validate_tarball_contents(data)
 
