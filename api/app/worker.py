@@ -53,7 +53,12 @@ def process_verification(verification_id: str, use_docker: bool = True) -> None:
 
         try:
             if use_docker:
-                result = build_contract(source_dir, output_dir, image=record.builder_image)
+                result = build_contract(
+                    source_dir,
+                    output_dir,
+                    image=record.builder_image,
+                    bldopt=record.bldopt,
+                )
             else:
                 result = build_contract_local(source_dir, output_dir)
         except BuildError as exc:
