@@ -112,3 +112,27 @@ def declared_build_image(meta: dict[str, str]) -> Optional[str]:
         if meta.get(key):
             return meta[key]
     return None
+
+
+def declared_bldopt(meta: dict[str, str]) -> Optional[str]:
+    if not meta:
+        return None
+    return meta.get("bldopt")
+
+
+def declared_source_repo(meta: dict[str, str]) -> Optional[str]:
+    if not meta:
+        return None
+    for key in ("source_repo", "sourcerepo"):
+        if meta.get(key):
+            return meta[key]
+    return None
+
+
+def declared_source_rev(meta: dict[str, str]) -> Optional[str]:
+    if not meta:
+        return None
+    for key in ("source_rev", "sourcerev", "source_commit"):
+        if meta.get(key):
+            return meta[key]
+    return None

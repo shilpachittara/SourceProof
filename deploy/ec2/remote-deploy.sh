@@ -25,7 +25,7 @@ echo "==> Building API image…"
 docker compose -f "$SOURCEPROOF_COMPOSE_FILE" build api
 
 echo "==> Building pinned builder image (required for verifications)…"
-docker compose --profile builder build builder
+docker compose -f docker-compose.yml --profile builder build builder
 
 echo "==> Restarting API container…"
 docker compose -f "$SOURCEPROOF_COMPOSE_FILE" up -d --force-recreate api

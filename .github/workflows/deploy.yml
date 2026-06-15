@@ -29,7 +29,9 @@ jobs:
             tests/test_storage.py \
             tests/test_allowlist.py \
             tests/test_sources_modes.py \
-            tests/test_rpc.py
+            tests/test_rpc.py \
+            tests/test_api.py \
+            tests/test_aggregation.py
 
   deploy:
     needs: test
