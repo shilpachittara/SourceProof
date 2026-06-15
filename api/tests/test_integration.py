@@ -44,7 +44,12 @@ def test_end_to_end_with_example_tarball(client: TestClient, monkeypatch: pytest
     tarball = load_example_tarball(ROOT)
     expected_hash = WASM_HASH_A
 
-    def fake_build(source_dir: Path, output_dir: Path, image: str | None = None) -> BuildResult:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
         assert (source_dir / "Cargo.toml").exists()
         assert (source_dir / "contracts/hello_world/src/lib.rs").exists()
         return BuildResult(

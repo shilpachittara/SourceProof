@@ -78,7 +78,33 @@ def _rustc_version(image: str | None = None) -> str:
         return "unknown"
 
 
-def build_contract(source_dir: Path, output_dir: Path, image: str | None = None) -> BuildResult:
+def _soroban_sdk_version(lock_path: Path) -> str | None:
+    """Best-effort parse of soroban-sdk version from a Cargo.lock file."""
+    if not lock_path.is_file():
+        return None
+    try:
+        in_package = False
+        for line in lock_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped == "[[package]]":
+                in_package = False
+                continue
+            if stripped == 'name = "soroban-sdk"':
+                in_package = True
+                continue
+            if in_package and stripped.startswith("version = "):
+                return stripped.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        return None
+    return None
+
+
+def build_contract(
+    source_dir: Path,
+    output_dir: Path,
+    image: str | None = None,
+    bldopt: str | None = None,
+) -> BuildResult:
     if not _docker_available():
         raise BuildError("Docker is not available. Install Docker and build the builder image.")
 
@@ -93,19 +119,20 @@ def build_contract(source_dir: Path, output_dir: Path, image: str | None = None)
     host_source = settings.host_path_for(str(source_dir))
     host_output = settings.host_path_for(str(output_dir))
 
-    cmd = [
-        "docker",
-        "run",
-        "--rm",
-        "-v",
-        f"{host_source}:/source:ro",
-        "-v",
-        f"{host_output}:/output",
-        builder_image,
-    ]
+    cmd = ["docker", "run", "--rm"]
     if settings.builder_network_disabled:
-        cmd.insert(3, "--network")
-        cmd.insert(4, "none")
+        cmd.extend(["--network", "none"])
+    if bldopt:
+        cmd.extend(["-e", f"BLDOPT={bldopt}"])
+    cmd.extend(
+        [
+            "-v",
+            f"{host_source}:/source:ro",
+            "-v",
+            f"{host_output}:/output",
+            builder_image,
+        ]
+    )
 
     logger.info("Running builder container: %s", " ".join(cmd))
     completed = subprocess.run(
@@ -124,6 +151,9 @@ def build_contract(source_dir: Path, output_dir: Path, image: str | None = None)
         raise BuildError("Builder did not produce /output/contract.wasm")
 
     wasm_bytes = wasm_path.read_bytes()
+    sdk_version = _soroban_sdk_version(output_dir / "Cargo.lock") or _soroban_sdk_version(
+        source_dir / "Cargo.lock"
+    )
     metadata = {
         "docker_image": builder_image,
         "docker_image_digest": _inspect_image_digest(builder_image),
@@ -132,6 +162,10 @@ def build_contract(source_dir: Path, output_dir: Path, image: str | None = None)
         "build_profile": "release",
         "verifier_instance_id": settings.verifier_instance_id,
     }
+    if bldopt:
+        metadata["applied_bldopt"] = bldopt
+    if sdk_version:
+        metadata["soroban_sdk_version"] = sdk_version
     return BuildResult(
         wasm_bytes=wasm_bytes,
         wasm_hash=sha256_hex(wasm_bytes),

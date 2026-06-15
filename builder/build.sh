@@ -8,7 +8,12 @@ cp -a /source/. "$BUILD_DIR/"
 cd "$BUILD_DIR"
 
 echo "==> Building Soroban contract with stellar contract build"
-stellar contract build
+if [[ -n "${BLDOPT:-}" ]]; then
+  # shellcheck disable=SC2086
+  stellar contract build ${BLDOPT}
+else
+  stellar contract build
+fi
 
 WASM=""
 for candidate in target/wasm32v1-none/release/*.wasm; do
