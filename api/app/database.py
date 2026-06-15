@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -11,6 +12,9 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.allowlist import evaluate_build_image
+
+_BLDOPT_PACKAGE = re.compile(r"--package\s+(\S+)")
+_BLDOPT_MANIFEST = re.compile(r"--manifest-path\s+(\S+)")
 from app.config import settings
 
 _engine: Optional[Engine] = None
@@ -130,6 +134,54 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def infer_metadata_source(record: Verification) -> str:
+    """Whether SEP-58 build fields were read from chain or supplied by submitter."""
+    meta = record.onchain_meta or {}
+    if meta.get("bldimg") or meta.get("bldopt") or meta.get("source_repo"):
+        return "onchain"
+    return "supplied"
+
+
+def infer_image_trust(record: Verification) -> str:
+    """Trust tier for the builder image actually used on rebuild."""
+    evaluated = evaluate_build_image(record.build_metadata)
+    if not evaluated:
+        return "other"
+    if evaluated.get("sdf_trusted"):
+        return "sdf"
+    if evaluated.get("allowlisted"):
+        return "allowlisted"
+    return "other"
+
+
+def parse_source_identity(bldopt: Optional[str]) -> Optional[dict[str, str]]:
+    """Extract workspace contract identity from a SEP-58 bldopt string."""
+    if not bldopt:
+        return None
+    package = _BLDOPT_PACKAGE.search(bldopt)
+    manifest = _BLDOPT_MANIFEST.search(bldopt)
+    if not package and not manifest:
+        return None
+    out: dict[str, str] = {}
+    if package:
+        out["package"] = package.group(1)
+    if manifest:
+        out["manifest_path"] = manifest.group(1)
+    return out
+
+
+def _trust_fields(record: Verification) -> dict[str, Any]:
+    bldopt = record.bldopt or (record.onchain_meta or {}).get("bldopt")
+    fields: dict[str, Any] = {
+        "metadata_source": infer_metadata_source(record),
+        "image_trust": infer_image_trust(record),
+    }
+    identity = parse_source_identity(bldopt)
+    if identity:
+        fields["source_identity"] = identity
+    return fields
+
+
 def _sep58_block(record: Verification, base_url: str) -> dict[str, Any]:
     """SEP-58 source-identifier fields, named per the spec vocabulary.
 
@@ -193,6 +245,7 @@ def aggregate_verifiers(
                 "built_wasm_hash": r.built_wasm_hash,
                 "matches_current_chain": matches,
                 "freshness": freshness,
+                **_trust_fields(r),
                 "verified_at": r.verified_at.isoformat() if r.verified_at else None,
                 # explorer-friendly badge, e.g. "[√] Verified by local-verifier-1"
                 "signal": _verifier_signal(r.status, vid),
@@ -260,6 +313,7 @@ def serialize_verification(
         "contract_id": record.contract_id,
         "status": record.status,
         "trust_level": record.trust_level,
+        **_trust_fields(record),
         "wasm_hash": record.wasm_hash,
         "source": {
             "origin": record.source_origin,
