@@ -130,6 +130,31 @@ def new_verification_id() -> str:
     return str(uuid.uuid4())
 
 
+def find_duplicate_verification(
+    db: Session,
+    *,
+    network: str,
+    contract_id: Optional[str],
+    wasm_hash: str,
+    tarball_content_hash: str,
+    verifier_instance_id: str,
+) -> Optional[Verification]:
+    """Return the latest row matching the idempotent submit key, if any."""
+    query = db.query(Verification).filter(
+        Verification.network == network,
+        Verification.tarball_content_hash == tarball_content_hash,
+        Verification.verifier_instance_id == verifier_instance_id,
+    )
+    if contract_id:
+        query = query.filter(Verification.contract_id == contract_id)
+    else:
+        query = query.filter(
+            Verification.contract_id.is_(None),
+            Verification.wasm_hash == wasm_hash,
+        )
+    return query.order_by(Verification.created_at.desc()).first()
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
