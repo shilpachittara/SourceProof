@@ -16,17 +16,20 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.badge import badge_json, badge_svg
 from app.database import (
     TrustLevel,
     Verification,
     VerificationStatus,
     aggregate_verifiers,
+    find_duplicate_verification,
     get_db,
     init_db,
     new_verification_id,
     serialize_verification,
     utcnow,
 )
+from app.errors import api_error
 from app.ratelimit import RateLimiter
 from app.rpc import RpcError, fetch_wasm_bytes, fetch_wasm_hash, normalize_hash, sha256_hex
 from app.sources import (
@@ -228,7 +231,7 @@ async def submit_verification(
     _enforce_rate_limit(request)
     network = network.lower().strip()
     if network not in settings.rpc_urls:
-        raise HTTPException(status_code=400, detail=f"Unsupported network: {network}")
+        raise api_error(400, "unsupported_network", f"Unsupported network: {network}")
 
     contract_id = _optional(contract_id)
     wasm_hash = _optional(wasm_hash)
@@ -240,7 +243,7 @@ async def submit_verification(
     bldopt = _optional(bldopt)
 
     if not contract_id and not wasm_hash:
-        raise HTTPException(status_code=400, detail="Provide contract_id or wasm_hash")
+        raise api_error(400, "missing_identifier", "Provide contract_id or wasm_hash")
 
     # Resolve source via any SEP-58 mode, normalizing to one stored tarball.
     source_origin = "upload"
@@ -257,9 +260,10 @@ async def submit_verification(
 
     if not has_explicit_source:
         if not contract_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Provide a source input or contract_id with on-chain source_repo metadata",
+            raise api_error(
+                400,
+                "missing_source",
+                "Provide a source input or contract_id with on-chain source_repo metadata",
             )
         try:
             expected_hash, onchain_wasm = await fetch_wasm_hash(network, contract_id, wasm_hash)
@@ -331,10 +335,7 @@ async def submit_verification(
     try:
         content_hash, stored_path = validate_and_store_tarball(tarball_bytes)
     except TarballTooLargeError as exc:
-        raise HTTPException(
-            status_code=413,
-            detail={"code": "tarball_too_large", "message": str(exc)},
-        ) from exc
+        raise api_error(413, "tarball_too_large", str(exc)) from exc
     except TarballError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -369,6 +370,24 @@ async def submit_verification(
         chosen_image = settings.builder_image
     if declared_image and not allowlist.is_allowed(declared_image):
         onchain_meta = {**onchain_meta, "bldimg_allowlisted": "false"}
+
+    existing = find_duplicate_verification(
+        db,
+        network=network,
+        contract_id=contract_id,
+        wasm_hash=expected_hash,
+        tarball_content_hash=content_hash,
+        verifier_instance_id=settings.verifier_instance_id,
+    )
+    if existing:
+        return {
+            "verification_id": existing.id,
+            "status": existing.status,
+            "source_origin": existing.source_origin,
+            "source_commit": existing.source_commit,
+            "poll_url": f"{base_url(request)}/v1/verifications/{existing.id}",
+            "idempotent": True,
+        }
 
     verification_id = new_verification_id()
     record = Verification(
@@ -411,17 +430,15 @@ async def get_verification(
 ) -> dict:
     record = db.get(Verification, verification_id)
     if not record:
-        raise HTTPException(status_code=404, detail="Verification not found")
+        raise api_error(404, "verification_not_found", "Verification not found")
     return serialize_verification(record, base_url(request))
 
 
-@app.get("/v1/{network}/contracts/{contract_id}")
-async def get_contract_verification(
+async def _contract_lookup_records(
     network: str,
     contract_id: str,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> dict:
+    db: Session,
+) -> tuple[list[Verification], Optional[str]]:
     network = network.lower().strip()
     all_records = (
         db.query(Verification)
@@ -432,18 +449,67 @@ async def get_contract_verification(
         .order_by(Verification.verified_at.desc(), Verification.created_at.desc())
         .all()
     )
-
     if not all_records:
-        raise HTTPException(status_code=404, detail="No verification on record for this contract")
+        raise api_error(404, "contract_not_verified", "No verification on record for this contract")
 
-    # Live freshness check: does the Wasm we verified still match what is
-    # deployed on chain right now? (Matters for upgradeable contracts.)
     current_wasm_hash: Optional[str] = None
     try:
         wasm_bytes = await fetch_wasm_bytes(network, contract_id)
         current_wasm_hash = sha256_hex(wasm_bytes)
     except Exception as exc:  # noqa: BLE001 - freshness is best-effort
         logger.warning("Could not fetch live wasm for %s: %s", contract_id, exc)
+    return all_records, current_wasm_hash
+
+
+@app.get("/v1/{network}/contracts/{contract_id}/badge.json")
+async def get_contract_badge_json(
+    network: str,
+    contract_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    all_records, current_wasm_hash = await _contract_lookup_records(network, contract_id, db)
+    multi = aggregate_verifiers(all_records, current_wasm_hash=current_wasm_hash)
+    freshness = None
+    if current_wasm_hash:
+        for v in multi["verifiers"]:
+            if v.get("freshness"):
+                freshness = v["freshness"]
+                break
+    return badge_json(
+        network=network.lower().strip(),
+        contract_id=contract_id,
+        consensus=multi["consensus"],
+        freshness=freshness,
+        verifier_count=multi["verifier_count"],
+    )
+
+
+@app.get("/v1/{network}/contracts/{contract_id}/badge.svg")
+async def get_contract_badge_svg(
+    network: str,
+    contract_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    payload = await get_contract_badge_json(network, contract_id, request, db)
+    svg = badge_svg(
+        label=payload["label"],
+        consensus=payload["consensus"],
+        verified=payload["verified"],
+    )
+    return Response(content=svg, media_type="image/svg+xml")
+
+
+@app.get("/v1/{network}/contracts/{contract_id}")
+async def get_contract_verification(
+    network: str,
+    contract_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    all_records, current_wasm_hash = await _contract_lookup_records(network, contract_id, db)
+    network = network.lower().strip()
 
     verified_records = [r for r in all_records if r.status == VerificationStatus.VERIFIED.value]
     verifications = [
@@ -493,9 +559,57 @@ async def _lookup_by_wasm_hash(wasm_hash: str, request: Request, db: Session) ->
         .all()
     )
     if not all_records:
-        raise HTTPException(status_code=404, detail="No verification on record for this wasm hash")
+        raise api_error(404, "wasm_not_found", "No verification on record for this wasm hash")
 
     return _wasm_lookup_payload(normalized, all_records, request)
+
+
+@app.get("/v1/wasm/{wasm_hash}/contracts")
+async def list_wasm_contracts(
+    wasm_hash: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        normalized = normalize_hash(wasm_hash)
+    except ValueError as exc:
+        raise api_error(400, "invalid_wasm_hash", str(exc)) from exc
+
+    all_records = (
+        db.query(Verification)
+        .filter(Verification.wasm_hash == normalized)
+        .order_by(Verification.verified_at.desc(), Verification.created_at.desc())
+        .all()
+    )
+    if not all_records:
+        raise api_error(404, "wasm_not_found", "No verification on record for this wasm hash")
+
+    by_contract: dict[tuple[str, str], list[Verification]] = {}
+    for record in all_records:
+        if not record.contract_id:
+            continue
+        key = (record.network, record.contract_id)
+        by_contract.setdefault(key, []).append(record)
+
+    base = base_url(request)
+    contracts = []
+    for net, cid in sorted(by_contract):
+        recs = by_contract[(net, cid)]
+        multi = aggregate_verifiers(recs, current_wasm_hash=normalized)
+        contracts.append(
+            {
+                "network": net,
+                "contract_id": cid,
+                "consensus": multi["consensus"],
+                "verifier_count": multi["verifier_count"],
+                "lookup_url": f"{base}/v1/{net}/contracts/{cid}",
+            }
+        )
+    return {
+        "wasm_hash": normalized,
+        "contract_count": len(contracts),
+        "contracts": contracts,
+    }
 
 
 @app.get("/v1/wasm/{wasm_hash}")
