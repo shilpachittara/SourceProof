@@ -60,7 +60,7 @@ A standalone Docker image used only to rebuild contracts during verification (it
 ### Demo UI (`demo/ui`) and CLI (`cli/`)
 
 - `demo/ui` — static SPA (submit, lookup, consensus, source browser), mounted by the API.
-- `cli/sourceproof.py` — stdlib-only developer CLI (`verify` / `status` / `lookup` / `wasm`), a thin reference client over the REST API.
+- `cli/sourceproof.py` — stdlib-only developer CLI (`verify` / `status` / `lookup` / `wasm` / `wasm-contracts` / `badge`), a thin reference client over the REST API.
 
 ## 3. Repository Structure
 
@@ -78,6 +78,8 @@ soroban-verify/
 │   │   ├── allowlist.py     # digest-pinned trusted builder images
 │   │   ├── ratelimit.py     # per-IP sliding-window limiter
 │   │   ├── database.py      # models, trust levels, sep58 block, aggregate_verifiers()
+│   │   ├── errors.py        # structured API error codes (verifier-API SEP aligned)
+│   │   ├── badge.py         # embeddable SVG/JSON verification badges
 │   │   └── config.py        # env-driven settings (RPC, limits, builder image)
 │   ├── Dockerfile
 │   └── requirements.txt
@@ -303,24 +305,31 @@ Outbound fetches to GitHub (archive download), arbitrary HTTPS hosts (`tarball_u
 
 ### Primary verify flow
 
-1. Client sends `POST /v1/verify` with `network`, `contract_id` (or `wasm_hash`), and a source (any SEP-58 mode).
+1. Client sends `POST /v1/verify` with `network`, `contract_id` (or `wasm_hash`), and a source (any SEP-58 mode, or contract-id-only when on-chain `source_repo` is present).
 2. The API rate-limits the caller, validates the identifier, resolves + stores the source as a content-addressed tarball.
-3. The API reads the expected on-chain hash via RPC, parses `contractmetav0`, selects the allowlisted builder image, writes a `pending` record, and returns `202`.
-4. The background worker extracts the tarball, rebuilds in the pinned image, and compares hashes → `verified` / `mismatch` / `failed`.
-5. The client polls `GET /v1/verifications/{id}`; explorers call `GET /v1/{network}/contracts/{id}`.
+3. Duplicate submits with the same `(network, contract_id, tarball hash, verifier)` return the existing job (`idempotent: true`).
+4. The API reads the expected on-chain hash via RPC, parses `contractmetav0`, selects the allowlisted builder image, writes a `pending` record, and returns `202`.
+5. The background worker extracts the tarball, rebuilds in the pinned image, and compares hashes → `verified` / `mismatch` / `failed`.
+6. The client polls `GET /v1/verifications/{id}`; explorers call `GET /v1/{network}/contracts/{id}` or embed `…/badge.svg`.
 
 ### Endpoints (implemented)
 
 | Route | Purpose |
 |---|---|
-| `POST /v1/verify` | Submit a verification (multipart) → `202` + `verification_id` |
+| `POST /v1/verify` | Submit a verification (multipart) → `202` + `verification_id`; idempotent on duplicate key |
 | `GET /v1/verifications` | List recent verifications |
 | `GET /v1/verifications/{verification_id}` | Poll one job's status |
 | `GET /v1/{network}/contracts/{contract_id}` | **Primary explorer lookup** — aggregated `consensus` + `verifiers[]` + freshness |
+| `GET /v1/{network}/contracts/{contract_id}/badge.json` | Embeddable badge metadata (`verified`, `label`, `consensus`) |
+| `GET /v1/{network}/contracts/{contract_id}/badge.svg` | Embeddable SVG badge for READMEs and explorers |
 | `GET /v1/wasm/{wasm_hash}` | Same shape, keyed by bytecode hash |
+| `GET /v1/wasm/{wasm_hash}/contracts` | Reverse index — contract instances sharing this Wasm |
+| `GET /wasms/{wasm_hash}.json` | Verifier-API SEP canonical wasm lookup alias |
 | `GET /v1/source/{content_hash}` | Download the stored source tarball |
 | `GET /v1/source/{content_hash}/files` | List the tarball's file tree |
 | `GET /v1/source/{content_hash}/file` | Preview a single file |
+
+Client errors use a structured `detail` object: `{ "code": "<machine_id>", "message": "<human text>" }` (verifier-API SEP `error-1.0` aligned). Examples: `missing_identifier`, `verification_not_found`, `contract_not_verified`, `wasm_not_found`, `tarball_too_large`.
 | `GET /health` · `GET /docs` · `GET /redoc` | Health probe · Swagger UI · ReDoc |
 
 ## 9. Verification Engine & Status Model
@@ -378,8 +387,8 @@ Reproducibility is the basis of trust:
 The repo is a working prototype, not yet the production service. The main gaps (tracked in the roadmap):
 
 - single in-process worker (no distributed job queue / horizontal autoscaling yet)
-- multi-verifier **federation** (registration + signed results) is designed but not wired — aggregation is implemented for a single instance
-- `sep55_attestation` ingestion, contract-interface/bindings endpoints, status badge, shared-Wasm coverage, IPFS pinning, and the trusted-interaction UI are roadmap
+- `sep55_attestation` ingestion, contract-interface/bindings endpoints, IPFS pinning, and the trusted-interaction UI are roadmap
+- multi-verifier **federation** (registration + signed cross-operator results) is designed but not wired — aggregation is implemented for a single instance
 - the demo stack relaxes build network isolation (`BUILDER_NETWORK_DISABLED=false`) so cargo can fetch crates; production runs `--network none`
 
 ## 15. Development Notes
