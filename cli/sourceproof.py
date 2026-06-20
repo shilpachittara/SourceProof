@@ -23,6 +23,8 @@ Examples
   sourceproof status <verification_id>
   sourceproof lookup testnet CB4I...
   sourceproof wasm <wasm_hash>
+  sourceproof wasm-contracts <wasm_hash>
+  sourceproof badge testnet CB4I... [--format json|svg]
 """
 
 from __future__ import annotations
@@ -38,6 +40,15 @@ import urllib.request
 import uuid
 
 DEFAULT_API = os.environ.get("SOURCEPROOF_API", "http://127.0.0.1:8080")
+
+
+def _format_api_error(data: dict) -> str:
+    detail = data.get("detail")
+    if isinstance(detail, dict):
+        code = detail.get("code", "error")
+        message = detail.get("message", detail)
+        return f"{code}: {message}"
+    return str(detail or data)
 
 
 def _encode_multipart(fields: dict[str, str], file_field: str | None, file_path: str | None):
@@ -99,10 +110,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
     )
     status, data = _request("POST", f"{args.api}/v1/verify", body=body, content_type=ctype)
     if status >= 400:
-        print(f"submit failed ({status}): {data.get('detail')}", file=sys.stderr)
+        print(f"submit failed ({status}): {_format_api_error(data)}", file=sys.stderr)
         return 1
     vid = data.get("verification_id")
-    print(f"queued: {vid}  ({data.get('source_origin')})")
+    if data.get("idempotent"):
+        print(f"existing job: {vid}  ({data.get('source_origin')})")
+    else:
+        print(f"queued: {vid}  ({data.get('source_origin')})")
     if not args.wait:
         print(f"poll: {args.api}/v1/verifications/{vid}")
         return 0
@@ -130,14 +144,53 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_lookup(args: argparse.Namespace) -> int:
     status, data = _request("GET", f"{args.api}/v1/{args.network}/contracts/{args.contract_id}")
+    if status >= 400:
+        print(_format_api_error(data), file=sys.stderr)
+        return 1
     print(json.dumps(data, indent=2))
-    return 0 if status < 400 else 1
+    return 0
+
+
+def cmd_badge(args: argparse.Namespace) -> int:
+    base = f"{args.api}/v1/{args.network}/contracts/{args.contract_id}/badge"
+    if args.format == "svg":
+        url = f"{base}.svg"
+        req = urllib.request.Request(url)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                sys.stdout.buffer.write(resp.read())
+        except urllib.error.HTTPError as exc:
+            try:
+                data = json.loads(exc.read().decode() or "{}")
+                print(_format_api_error(data), file=sys.stderr)
+            except Exception:
+                print(exc.reason, file=sys.stderr)
+            return 1
+        return 0
+    status, data = _request("GET", f"{base}.json")
+    if status >= 400:
+        print(_format_api_error(data), file=sys.stderr)
+        return 1
+    print(json.dumps(data, indent=2))
+    return 0
 
 
 def cmd_wasm(args: argparse.Namespace) -> int:
     status, data = _request("GET", f"{args.api}/v1/wasm/{args.wasm_hash}")
+    if status >= 400:
+        print(_format_api_error(data), file=sys.stderr)
+        return 1
     print(json.dumps(data, indent=2))
-    return 0 if status < 400 else 1
+    return 0
+
+
+def cmd_wasm_contracts(args: argparse.Namespace) -> int:
+    status, data = _request("GET", f"{args.api}/v1/wasm/{args.wasm_hash}/contracts")
+    if status >= 400:
+        print(_format_api_error(data), file=sys.stderr)
+        return 1
+    print(json.dumps(data, indent=2))
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -147,7 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     v = sub.add_parser("verify", help="submit a source for verification")
     v.add_argument("--network", required=True, choices=["testnet", "mainnet", "futurenet"])
-    v.add_argument("--contract-id")
+    v.add_argument("--contract-id", help="contract id (on-chain source_repo auto-resolve when no source)")
     v.add_argument("--wasm-hash")
     v.add_argument("--source", help="path to a .tar.gz source archive")
     v.add_argument("--source-repo", help="SEP-58 public repo URL")
@@ -171,6 +224,16 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("wasm", help="query verification status by wasm hash")
     w.add_argument("wasm_hash")
     w.set_defaults(func=cmd_wasm)
+
+    wc = sub.add_parser("wasm-contracts", help="list contracts sharing a wasm hash")
+    wc.add_argument("wasm_hash")
+    wc.set_defaults(func=cmd_wasm_contracts)
+
+    b = sub.add_parser("badge", help="fetch embeddable verification badge")
+    b.add_argument("network", choices=["testnet", "mainnet", "futurenet"])
+    b.add_argument("contract_id")
+    b.add_argument("--format", choices=["json", "svg"], default="json")
+    b.set_defaults(func=cmd_badge)
     return p
 
 

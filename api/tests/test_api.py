@@ -542,3 +542,132 @@ def test_wasms_json_canonical_lookup(client: TestClient, monkeypatch: pytest.Mon
     assert native.status_code == 200
     assert sep.status_code == 200
     assert sep.json()["wasm_hash"] == native.json()["wasm_hash"]
+
+
+def test_idempotent_submit_returns_existing_job(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
+        return BuildResult(
+            wasm_bytes=b"\x00asm",
+            wasm_hash=WASM_HASH_A,
+            build_metadata={"docker_image": "test"},
+        )
+
+    monkeypatch.setattr("app.worker.build_contract", fake_build)
+
+    tarball = make_source_tarball()
+    data = {
+        "network": "testnet",
+        "wasm_hash": WASM_HASH_A,
+        "contract_id": "CIDEM1",
+    }
+    first = client.post(
+        "/v1/verify",
+        data=data,
+        files={"source": ("source.tar.gz", tarball, "application/gzip")},
+    )
+    assert first.status_code == 202
+    first_id = first.json()["verification_id"]
+
+    second = client.post(
+        "/v1/verify",
+        data=data,
+        files={"source": ("source.tar.gz", tarball, "application/gzip")},
+    )
+    assert second.status_code == 202
+    body = second.json()
+    assert body["verification_id"] == first_id
+    assert body["idempotent"] is True
+
+
+def test_structured_error_on_missing_identifier(client: TestClient) -> None:
+    response = client.post("/v1/verify", data={"network": "testnet"})
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["code"] == "missing_identifier"
+    assert "message" in detail
+
+
+def test_structured_error_verification_not_found(client: TestClient) -> None:
+    response = client.get("/v1/verifications/does-not-exist")
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["code"] == "verification_not_found"
+
+
+def test_contract_badge_json_and_svg(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
+        return BuildResult(
+            wasm_bytes=b"\x00asm",
+            wasm_hash=WASM_HASH_A,
+            build_metadata={"docker_image": "test"},
+        )
+
+    monkeypatch.setattr("app.worker.build_contract", fake_build)
+
+    async def skip_live_wasm(network: str, contract_id: str) -> bytes:
+        raise RuntimeError("rpc offline in test")
+
+    monkeypatch.setattr("app.main.fetch_wasm_bytes", skip_live_wasm)
+
+    tarball = make_source_tarball()
+    client.post(
+        "/v1/verify",
+        data={"network": "testnet", "wasm_hash": WASM_HASH_A, "contract_id": "CBADGE1"},
+        files={"source": ("source.tar.gz", tarball, "application/gzip")},
+    )
+
+    badge_json = client.get("/v1/testnet/contracts/CBADGE1/badge.json")
+    assert badge_json.status_code == 200
+    payload = badge_json.json()
+    assert payload["contract_id"] == "CBADGE1"
+    assert payload["consensus"] == "verified"
+    assert payload["verified"] is True
+
+    badge_svg = client.get("/v1/testnet/contracts/CBADGE1/badge.svg")
+    assert badge_svg.status_code == 200
+    assert badge_svg.headers["content-type"].startswith("image/svg+xml")
+    assert "Source verified" in badge_svg.text
+
+
+def test_wasm_contracts_reverse_index(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
+        return BuildResult(
+            wasm_bytes=b"\x00asm",
+            wasm_hash=WASM_HASH_A,
+            build_metadata={"docker_image": "test"},
+        )
+
+    monkeypatch.setattr("app.worker.build_contract", fake_build)
+
+    tarball = make_source_tarball()
+    for cid in ("CREV1", "CREV2"):
+        client.post(
+            "/v1/verify",
+            data={"network": "testnet", "wasm_hash": WASM_HASH_A, "contract_id": cid},
+            files={"source": ("source.tar.gz", tarball, "application/gzip")},
+        )
+
+    response = client.get(f"/v1/wasm/{WASM_HASH_A}/contracts")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["contract_count"] == 2
+    ids = {c["contract_id"] for c in body["contracts"]}
+    assert ids == {"CREV1", "CREV2"}
+    assert all(c["consensus"] == "verified" for c in body["contracts"])
