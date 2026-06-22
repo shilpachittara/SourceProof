@@ -30,6 +30,7 @@ from app.database import (
     utcnow,
 )
 from app.errors import api_error
+from app.info import capabilities_payload, health_payload
 from app.ratelimit import RateLimiter
 from app.rpc import RpcError, fetch_wasm_bytes, fetch_wasm_hash, normalize_hash, sha256_hex
 from app.sources import (
@@ -127,10 +128,12 @@ def base_url(request: Request) -> str:
 def _enforce_rate_limit(request: Request) -> None:
     client = request.client.host if request.client else "unknown"
     if not _verify_limiter.allow(client):
-        raise HTTPException(
-            status_code=429,
-            detail="Rate limit exceeded for verification submissions. Try again shortly.",
-            headers={"Retry-After": str(_verify_limiter.retry_after(client))},
+        retry_after = str(_verify_limiter.retry_after(client))
+        raise api_error(
+            429,
+            "rate_limited",
+            "Rate limit exceeded for verification submissions. Try again shortly.",
+            headers={"Retry-After": retry_after},
         )
 
 
@@ -177,12 +180,14 @@ async def root() -> RedirectResponse:
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {
-        "status": "ok",
-        "service": settings.app_name,
-        "database": "pglite" if "pglite" in settings.database_url else "other",
-    }
+async def health() -> dict:
+    return health_payload()
+
+
+@app.get("/v1/info")
+async def service_info() -> dict:
+    """Capabilities and limits for API clients and explorers."""
+    return capabilities_payload()
 
 
 @app.get("/v1/verifications")
@@ -190,15 +195,36 @@ async def list_verifications(
     request: Request,
     status: Annotated[Optional[str], Query()] = None,
     network: Annotated[Optional[str], Query()] = None,
+    contract_id: Annotated[Optional[str], Query()] = None,
+    wasm_hash: Annotated[Optional[str], Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     db: Session = Depends(get_db),
 ) -> dict:
     query = db.query(Verification).order_by(Verification.created_at.desc())
     if status:
-        query = query.filter(Verification.status == status.lower().strip())
+        normalized_status = status.lower().strip()
+        allowed = {s.value for s in VerificationStatus}
+        if normalized_status not in allowed:
+            raise api_error(
+                400,
+                "invalid_status_filter",
+                f"status must be one of: {', '.join(sorted(allowed))}",
+            )
+        query = query.filter(Verification.status == normalized_status)
     if network:
-        query = query.filter(Verification.network == network.lower().strip())
+        normalized_network = network.lower().strip()
+        if normalized_network not in settings.rpc_urls:
+            raise api_error(400, "unsupported_network", f"Unsupported network: {network}")
+        query = query.filter(Verification.network == normalized_network)
+    if contract_id:
+        query = query.filter(Verification.contract_id == contract_id.strip())
+    if wasm_hash:
+        try:
+            normalized_hash = normalize_hash(wasm_hash)
+        except ValueError as exc:
+            raise api_error(400, "invalid_wasm_hash", str(exc)) from exc
+        query = query.filter(Verification.wasm_hash == normalized_hash)
     total = query.count()
     records = query.offset(offset).limit(limit).all()
     return {
@@ -609,6 +635,27 @@ async def list_wasm_contracts(
         "wasm_hash": normalized,
         "contract_count": len(contracts),
         "contracts": contracts,
+    }
+
+
+@app.get("/v1/builder/allowlist")
+async def get_builder_allowlist() -> dict:
+    """Active, non-revoked builder images this verifier may rebuild in."""
+    images = allowlist.active_images()
+    return {
+        "count": len(images),
+        "images": [
+            {
+                "name": img.name,
+                "digest": img.digest,
+                "stellar_cli_version": img.stellar_cli_version,
+                "sdf_trusted": img.sdf_trusted,
+                "deprecated_after": (
+                    img.deprecated_after.isoformat() if img.deprecated_after else None
+                ),
+            }
+            for img in images
+        ],
     }
 
 
