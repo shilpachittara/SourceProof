@@ -671,3 +671,91 @@ def test_wasm_contracts_reverse_index(client: TestClient, monkeypatch: pytest.Mo
     ids = {c["contract_id"] for c in body["contracts"]}
     assert ids == {"CREV1", "CREV2"}
     assert all(c["consensus"] == "verified" for c in body["contracts"])
+
+
+def test_health_includes_verifier_metadata(client: TestClient) -> None:
+    response = client.get("/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["api_version"]
+    assert body["verifier_instance_id"]
+    assert body["builder_image"]
+    assert "testnet" in body["networks"]
+
+
+def test_service_info_capabilities(client: TestClient) -> None:
+    response = client.get("/v1/info")
+    assert response.status_code == 200
+    body = response.json()
+    assert "features" in body
+    assert "idempotent_submit" in body["features"]
+    assert body["builder"]["allowlisted_images"]
+
+
+def test_list_verifications_filters(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+    ) -> BuildResult:
+        return BuildResult(
+            wasm_bytes=b"\x00asm",
+            wasm_hash=WASM_HASH_A,
+            build_metadata={"docker_image": "test"},
+        )
+
+    monkeypatch.setattr("app.worker.build_contract", fake_build)
+    tarball = make_source_tarball()
+    client.post(
+        "/v1/verify",
+        data={"network": "testnet", "wasm_hash": WASM_HASH_A, "contract_id": "CLIST1"},
+        files={"source": ("source.tar.gz", tarball, "application/gzip")},
+    )
+
+    by_contract = client.get("/v1/verifications?contract_id=CLIST1")
+    assert by_contract.status_code == 200
+    assert by_contract.json()["total"] >= 1
+
+    by_hash = client.get(f"/v1/verifications?wasm_hash={WASM_HASH_A}")
+    assert by_hash.status_code == 200
+    assert by_hash.json()["total"] >= 1
+
+    bad_status = client.get("/v1/verifications?status=not-a-status")
+    assert bad_status.status_code == 400
+    assert bad_status.json()["detail"]["code"] == "invalid_status_filter"
+
+
+def test_builder_allowlist_endpoint(client: TestClient) -> None:
+    response = client.get("/v1/builder/allowlist")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] >= 1
+    assert body["images"][0]["name"]
+
+
+def test_rate_limit_structured_error(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "verify_rate_limit", 1)
+    monkeypatch.setattr(settings, "verify_rate_window_seconds", 60)
+    monkeypatch.setattr("app.main._verify_limiter", __import__("app.ratelimit", fromlist=["RateLimiter"]).RateLimiter(1, 60))
+
+    tarball = make_source_tarball()
+    first = client.post(
+        "/v1/verify",
+        data={"network": "testnet", "wasm_hash": WASM_HASH_A},
+        files={"source": ("source.tar.gz", tarball, "application/gzip")},
+    )
+    assert first.status_code == 202
+
+    second = client.post(
+        "/v1/verify",
+        data={"network": "testnet", "wasm_hash": WASM_HASH_B},
+        files={"source": ("source.tar.gz", tarball, "application/gzip")},
+    )
+    assert second.status_code == 429
+    detail = second.json()["detail"]
+    assert detail["code"] == "rate_limited"
+    assert second.headers.get("retry-after")
