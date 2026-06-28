@@ -25,6 +25,8 @@ Examples
   sourceproof wasm <wasm_hash>
   sourceproof wasm-contracts <wasm_hash>
   sourceproof badge testnet CB4I... [--format json|svg]
+  sourceproof list [--network testnet] [--status verified]
+  sourceproof info
 """
 
 from __future__ import annotations
@@ -193,6 +195,36 @@ def cmd_wasm_contracts(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_list(args: argparse.Namespace) -> int:
+    params = []
+    if args.network:
+        params.append(f"network={args.network}")
+    if args.status:
+        params.append(f"status={args.status}")
+    if args.contract_id:
+        params.append(f"contract_id={args.contract_id}")
+    if args.wasm_hash:
+        params.append(f"wasm_hash={args.wasm_hash}")
+    if args.limit:
+        params.append(f"limit={args.limit}")
+    query = f"?{'&'.join(params)}" if params else ""
+    status, data = _request("GET", f"{args.api}/v1/verifications{query}")
+    if status >= 400:
+        print(_format_api_error(data), file=sys.stderr)
+        return 1
+    print(json.dumps(data, indent=2))
+    return 0
+
+
+def cmd_info(args: argparse.Namespace) -> int:
+    status, data = _request("GET", f"{args.api}/v1/info")
+    if status >= 400:
+        print(_format_api_error(data), file=sys.stderr)
+        return 1
+    print(json.dumps(data, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="sourceproof", description="SourceProof verification CLI")
     p.add_argument("--api", default=DEFAULT_API, help=f"API base URL (default {DEFAULT_API})")
@@ -234,6 +266,17 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("contract_id")
     b.add_argument("--format", choices=["json", "svg"], default="json")
     b.set_defaults(func=cmd_badge)
+
+    ls = sub.add_parser("list", help="list recent verifications")
+    ls.add_argument("--network", choices=["testnet", "mainnet", "futurenet"])
+    ls.add_argument("--status", choices=["pending", "verified", "mismatch", "failed"])
+    ls.add_argument("--contract-id")
+    ls.add_argument("--wasm-hash")
+    ls.add_argument("--limit", type=int, default=50)
+    ls.set_defaults(func=cmd_list)
+
+    i = sub.add_parser("info", help="show API capabilities and limits")
+    i.set_defaults(func=cmd_info)
     return p
 
 

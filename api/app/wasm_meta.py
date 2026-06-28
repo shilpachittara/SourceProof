@@ -6,6 +6,8 @@ keys include:
   - rsver     : rustc version used to build the contract
   - rssdkver  : soroban-sdk version (+ git hash)
   - bldimg    : (SEP-58) the builder image the deployer declares was used
+  - bldopt    : (SEP-58) repeating build flags (draft → ordered bldarg in #1965)
+  - bldarg    : (SEP-58 draft) ordered build arguments for replay
 
 We use this for two things:
   1. Explain mismatches ("on-chain built with rustc 1.90; verifier uses 1.89").
@@ -18,6 +20,7 @@ verification (the byte-for-byte hash comparison is the source of truth).
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -25,6 +28,15 @@ logger = logging.getLogger(__name__)
 _WASM_MAGIC = b"\x00asm"
 META_SECTION = "contractmetav0"
 ENV_META_SECTION = "contractenvmetav0"
+
+
+@dataclass
+class WasmMeta:
+    """Parsed contractmetav0 entries, preserving repeating SEP-58 keys."""
+
+    scalars: dict[str, str] = field(default_factory=dict)
+    bldopt: list[str] = field(default_factory=list)
+    bldarg: list[str] = field(default_factory=list)
 
 
 def _read_uleb128(data: bytes, pos: int) -> tuple[int, int]:
@@ -63,9 +75,9 @@ def _iter_custom_sections(wasm: bytes):
         pos = end
 
 
-def _decode_meta_entries(content: bytes) -> dict[str, str]:
-    """Decode a stream of XDR SCMetaEntry (SC_META_V0 key/val strings)."""
-    out: dict[str, str] = {}
+def _decode_meta_stream(content: bytes) -> list[tuple[str, str]]:
+    """Decode a stream of XDR SCMetaEntry preserving duplicate keys."""
+    out: list[tuple[str, str]] = []
     try:
         from xdrlib3 import Unpacker
         from stellar_sdk.xdr import SCMetaEntry
@@ -80,28 +92,63 @@ def _decode_meta_entries(content: bytes) -> dict[str, str]:
             val = v0.val
             key_s = key.decode("utf-8", "replace") if isinstance(key, (bytes, bytearray)) else str(key)
             val_s = val.decode("utf-8", "replace") if isinstance(val, (bytes, bytearray)) else str(val)
-            out[key_s] = val_s
+            out.append((key_s, val_s))
     except Exception as exc:  # noqa: BLE001 - best effort
         logger.debug("Could not decode contract meta entries: %s", exc)
     return out
 
 
-def parse_wasm_metadata(wasm_bytes: Optional[bytes]) -> dict[str, str]:
-    """Return a dict of on-chain contract metadata (rsver, rssdkver, bldimg, …).
+def _decode_meta_entries(content: bytes) -> dict[str, str]:
+    """Decode meta entries; last value wins (legacy scalar view)."""
+    out: dict[str, str] = {}
+    for key, val in _decode_meta_stream(content):
+        out[key] = val
+    return out
 
-    Empty dict when there is no metadata or it cannot be parsed.
-    """
+
+def parse_wasm_meta(wasm_bytes: Optional[bytes]) -> WasmMeta:
+    """Return full wasm metadata including repeating bldopt/bldarg entries."""
     if not wasm_bytes:
-        return {}
+        return WasmMeta()
     try:
-        meta: dict[str, str] = {}
+        meta = WasmMeta()
         for name, content in _iter_custom_sections(wasm_bytes):
-            if name == META_SECTION:
-                meta.update(_decode_meta_entries(content))
+            if name != META_SECTION:
+                continue
+            for key, val in _decode_meta_stream(content):
+                if key == "bldopt":
+                    meta.bldopt.append(val)
+                elif key == "bldarg":
+                    meta.bldarg.append(val)
+                else:
+                    meta.scalars[key] = val
         return meta
     except Exception as exc:  # noqa: BLE001
         logger.debug("Wasm metadata parse failed: %s", exc)
-        return {}
+        return WasmMeta()
+
+
+def parse_wasm_metadata(wasm_bytes: Optional[bytes]) -> dict[str, str]:
+    """Return scalar wasm metadata (last value per key) for legacy callers."""
+    parsed = parse_wasm_meta(wasm_bytes)
+    out = dict(parsed.scalars)
+    if parsed.bldopt:
+        out["bldopt"] = parsed.bldopt[-1]
+    if parsed.bldarg:
+        out["bldarg"] = parsed.bldarg[-1]
+    return out
+
+
+def wasm_meta_to_storage_dict(parsed: WasmMeta) -> dict[str, str | list[str]]:
+    """Serialize parsed meta for JSON storage on Verification.onchain_meta."""
+    out: dict[str, str | list[str]] = dict(parsed.scalars)
+    if parsed.bldopt:
+        out["bldopt_list"] = list(parsed.bldopt)
+        out["bldopt"] = parsed.bldopt[-1]
+    if parsed.bldarg:
+        out["bldarg_list"] = list(parsed.bldarg)
+        out["bldarg"] = parsed.bldarg[-1]
+    return out
 
 
 def declared_build_image(meta: dict[str, str]) -> Optional[str]:
@@ -118,6 +165,30 @@ def declared_bldopt(meta: dict[str, str]) -> Optional[str]:
     if not meta:
         return None
     return meta.get("bldopt")
+
+
+def declared_bldarg(meta: dict[str, str | list[str]]) -> list[str]:
+    if not meta:
+        return []
+    listed = meta.get("bldarg_list")
+    if isinstance(listed, list) and listed:
+        return [str(v) for v in listed]
+    single = meta.get("bldarg")
+    if isinstance(single, str) and single:
+        return [single]
+    return []
+
+
+def declared_bldopt_list(meta: dict[str, str | list[str]]) -> list[str]:
+    if not meta:
+        return []
+    listed = meta.get("bldopt_list")
+    if isinstance(listed, list) and listed:
+        return [str(v) for v in listed]
+    single = meta.get("bldopt")
+    if isinstance(single, str) and single:
+        return [single]
+    return []
 
 
 def declared_source_repo(meta: dict[str, str]) -> Optional[str]:

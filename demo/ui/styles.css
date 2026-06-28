@@ -907,6 +907,13 @@ code {
   gap: 0.6rem;
   flex-wrap: wrap;
 }
+.badge-embed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: 0.25rem;
+}
+.badge-embed-link { font-size: 0.75rem; }
 .consensus-title { font-weight: 600; font-size: 0.9rem; }
 .consensus-count { color: var(--text-tertiary); font-size: 0.8rem; }
 .consensus-chain {
