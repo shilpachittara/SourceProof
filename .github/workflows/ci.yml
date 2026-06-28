@@ -30,3 +30,14 @@ jobs:
             tests/test_rpc.py \
             tests/test_api.py \
             tests/test_aggregation.py
+
+  builder-repro:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build pinned builder image
+        run: docker compose -f docker-compose.yml --profile builder build builder
+
+      - name: Verify builder reproducibility
+        run: ./scripts/verify-builder-repro.sh

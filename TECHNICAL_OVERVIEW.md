@@ -60,7 +60,7 @@ A standalone Docker image used only to rebuild contracts during verification (it
 ### Demo UI (`demo/ui`) and CLI (`cli/`)
 
 - `demo/ui` — static SPA (submit, lookup, consensus, source browser), mounted by the API.
-- `cli/sourceproof.py` — stdlib-only developer CLI (`verify` / `status` / `lookup` / `wasm` / `wasm-contracts` / `badge`), a thin reference client over the REST API.
+- `cli/sourceproof.py` — stdlib-only developer CLI (`verify` / `status` / `lookup` / `wasm` / `wasm-contracts` / `badge` / `list` / `info`), a thin reference client over the REST API.
 
 ## 3. Repository Structure
 
@@ -79,6 +79,7 @@ soroban-verify/
 │   │   ├── ratelimit.py     # per-IP sliding-window limiter
 │   │   ├── database.py      # models, trust levels, sep58 block, aggregate_verifiers()
 │   │   ├── errors.py        # structured API error codes (verifier-API SEP aligned)
+│   │   ├── info.py          # health + capabilities discovery payloads
 │   │   ├── badge.py         # embeddable SVG/JSON verification badges
 │   │   └── config.py        # env-driven settings (RPC, limits, builder image)
 │   ├── Dockerfile
@@ -328,9 +329,12 @@ Outbound fetches to GitHub (archive download), arbitrary HTTPS hosts (`tarball_u
 | `GET /v1/source/{content_hash}` | Download the stored source tarball |
 | `GET /v1/source/{content_hash}/files` | List the tarball's file tree |
 | `GET /v1/source/{content_hash}/file` | Preview a single file |
+| `GET /health` | Liveness probe with verifier id, builder image, networks |
+| `GET /v1/info` | Capabilities, allowlisted builder images, rate/size limits |
+| `GET /v1/builder/allowlist` | Active builder images for rebuild trust |
+| `GET /docs` · `GET /redoc` | Swagger UI · ReDoc |
 
-Client errors use a structured `detail` object: `{ "code": "<machine_id>", "message": "<human text>" }` (verifier-API SEP `error-1.0` aligned). Examples: `missing_identifier`, `verification_not_found`, `contract_not_verified`, `wasm_not_found`, `tarball_too_large`.
-| `GET /health` · `GET /docs` · `GET /redoc` | Health probe · Swagger UI · ReDoc |
+Client errors use a structured `detail` object: `{ "code": "<machine_id>", "message": "<human text>" }` (verifier-API SEP `error-1.0` aligned). Examples: `missing_identifier`, `verification_not_found`, `contract_not_verified`, `wasm_not_found`, `tarball_too_large`, `rate_limited`.
 
 ## 9. Verification Engine & Status Model
 
@@ -379,7 +383,7 @@ Reproducibility is the basis of trust:
 
 - **Build isolation:** one ephemeral container per job; `--network none` in production (`BUILDER_NETWORK_DISABLED=true`); per-build timeout; work dir destroyed after compare.
 - **Tarball safety:** size cap (`MAX_TARBALL_BYTES`), safe unpack (no path traversal), content-addressed storage (tamper-evident; the hash is in the URL).
-- **Abuse protection:** per-IP sliding-window rate limit on writes (`429` + `Retry-After`). No API keys / KYC — this is a public good; abuse resistance is the control, not gated access.
+- **Abuse protection:** per-IP sliding-window rate limit on writes (`429` + `Retry-After`, `rate_limited` error code). No API keys / KYC — this is a public good; abuse resistance is the control, not gated access.
 - **No secret exposure:** submitted code runs without host secrets; the API does not custody keys or deploy contracts.
 
 ## 14. Current Limitations

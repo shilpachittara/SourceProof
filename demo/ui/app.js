@@ -210,6 +210,24 @@ function renderVerifierRow(vr) {
   </li>`;
 }
 
+function renderBadgeEmbed(network, contractId) {
+  if (!network || !contractId) return "";
+  const src = `${API}/v1/${encodeURIComponent(network)}/contracts/${encodeURIComponent(contractId)}/badge.svg`;
+  const json = `${API}/v1/${encodeURIComponent(network)}/contracts/${encodeURIComponent(contractId)}/badge.json`;
+  return `
+  <div class="badge-embed">
+    <img src="${src}" alt="SourceProof verification badge" height="20" loading="lazy" />
+    <a class="link-quiet badge-embed-link" href="${json}" target="_blank" rel="noopener">badge.json</a>
+  </div>`;
+}
+
+function formatApiError(detail) {
+  if (detail && typeof detail === "object") {
+    return detail.message || detail.code || JSON.stringify(detail);
+  }
+  return detail || "request failed";
+}
+
 function renderConsensus(data) {
   const verifiers = data.verifiers || [];
   if (!verifiers.length) return "";
@@ -240,6 +258,7 @@ function renderConsensus(data) {
         <span class="consensus-title">Multi-verifier result</span>
         <span class="pill ${consensusPillClass(consensus)}">${label}</span>
         <span class="consensus-count">${data.verifier_count} verifier(s)</span>
+        ${renderBadgeEmbed(data.network, data.contract_id)}
       </div>
       ${chain}
     </div>
@@ -574,7 +593,7 @@ document.getElementById("lookup-form").addEventListener("submit", async (e) => {
   try {
     const res = await fetch(`${API}/v1/${network}/contracts/${contractId}`);
     const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Not found");
+    if (!res.ok) throw new Error(formatApiError(data.detail));
     const verifs = data.verifications || [];
     const consensusHtml = renderConsensus(data);
     if (!verifs.length) {
