@@ -7,8 +7,20 @@ BUILD_DIR="$(mktemp -d /tmp/build.XXXXXX)"
 cp -a /source/. "$BUILD_DIR/"
 cd "$BUILD_DIR"
 
-echo "==> Building Soroban contract with stellar contract build"
-if [[ -n "${BLDOPT:-}" ]]; then
+#!/usr/bin/env bash
+set -euo pipefail
+
+# /source is mounted read-only; copy to a writable workspace so cargo can write
+# Cargo.lock and target/ during the build.
+BUILD_DIR="$(mktemp -d /tmp/build.XXXXXX)"
+cp -a /source/. "$BUILD_DIR/"
+cd "$BUILD_DIR"
+
+echo "==> Building Soroban contract"
+if [[ -n "${BLDARG:-}" ]]; then
+  mapfile -t BLDARGS <<< "$BLDARG"
+  stellar "${BLDARGS[@]}"
+elif [[ -n "${BLDOPT:-}" ]]; then
   # shellcheck disable=SC2086
   stellar contract build ${BLDOPT}
 else

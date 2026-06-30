@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from app import database
+from app.build_meta import BuildMetaError, require_package_selector
 from app.builder import BuildError, build_contract, build_contract_local
 from app.config import settings
 from app.storage import extract_tarball
@@ -51,6 +52,17 @@ def process_verification(verification_id: str, use_docker: bool = True) -> None:
         tarball_path = Path(record.source_path)
         extract_tarball(tarball_path, source_dir)
 
+        bldarg = database.resolved_bldarg(record)
+
+        try:
+            require_package_selector(source_dir, bldarg)
+        except BuildMetaError as exc:
+            record.status = database.VerificationStatus.FAILED.value
+            record.error_message = str(exc)
+            record.verified_at = database.utcnow()
+            db.commit()
+            return
+
         try:
             if use_docker:
                 result = build_contract(
@@ -58,6 +70,7 @@ def process_verification(verification_id: str, use_docker: bool = True) -> None:
                     output_dir,
                     image=record.builder_image,
                     bldopt=record.bldopt,
+                    bldarg=bldarg,
                 )
             else:
                 result = build_contract_local(source_dir, output_dir)

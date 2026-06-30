@@ -104,6 +104,7 @@ def build_contract(
     output_dir: Path,
     image: str | None = None,
     bldopt: str | None = None,
+    bldarg: list[str] | None = None,
 ) -> BuildResult:
     if not _docker_available():
         raise BuildError("Docker is not available. Install Docker and build the builder image.")
@@ -122,8 +123,12 @@ def build_contract(
     cmd = ["docker", "run", "--rm"]
     if settings.builder_network_disabled:
         cmd.extend(["--network", "none"])
-    if bldopt:
-        cmd.extend(["-e", f"BLDOPT={bldopt}"])
+    env_args: list[str] = []
+    if bldarg:
+        env_args.extend(["-e", "BLDARG=" + "\n".join(bldarg)])
+    elif bldopt:
+        env_args.extend(["-e", f"BLDOPT={bldopt}"])
+    cmd.extend(env_args)
     cmd.extend(
         [
             "-v",
@@ -162,7 +167,9 @@ def build_contract(
         "build_profile": "release",
         "verifier_instance_id": settings.verifier_instance_id,
     }
-    if bldopt:
+    if bldarg:
+        metadata["applied_bldarg"] = bldarg
+    elif bldopt:
         metadata["applied_bldopt"] = bldopt
     if sdk_version:
         metadata["soroban_sdk_version"] = sdk_version

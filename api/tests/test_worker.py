@@ -45,6 +45,7 @@ def test_process_verification_verified(isolated_env, monkeypatch: pytest.MonkeyP
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -73,6 +74,7 @@ def test_worker_forwards_bldopt_to_builder(isolated_env, monkeypatch: pytest.Mon
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         captured["bldopt"] = bldopt
         return BuildResult(
@@ -94,6 +96,37 @@ def test_worker_forwards_bldopt_to_builder(isolated_env, monkeypatch: pytest.Mon
     assert captured["bldopt"] == "--package counter"
 
 
+def test_worker_forwards_bldarg_to_builder(isolated_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    verification_id = _create_pending_record(WASM_HASH_A)
+    captured: dict[str, list[str] | None] = {"bldarg": None}
+
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+        bldarg: list[str] | None = None,
+    ) -> BuildResult:
+        captured["bldarg"] = bldarg
+        return BuildResult(
+            wasm_bytes=b"\x00asm",
+            wasm_hash=WASM_HASH_A,
+            build_metadata={"docker_image": "test", "applied_bldarg": bldarg or []},
+        )
+
+    monkeypatch.setattr("app.worker.build_contract", fake_build)
+
+    db = database.SessionLocal()
+    record = db.get(database.Verification, verification_id)
+    assert record is not None
+    record.bldarg = ["contract", "build", "--package=counter"]
+    db.commit()
+    db.close()
+
+    process_verification(verification_id, use_docker=True)
+    assert captured["bldarg"] == ["contract", "build", "--package=counter"]
+
+
 def test_process_verification_mismatch(isolated_env, monkeypatch: pytest.MonkeyPatch) -> None:
     verification_id = _create_pending_record(WASM_HASH_A)
 
@@ -102,6 +135,7 @@ def test_process_verification_mismatch(isolated_env, monkeypatch: pytest.MonkeyP
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm-other",
@@ -132,6 +166,7 @@ def test_process_verification_build_failed(isolated_env, monkeypatch: pytest.Mon
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         raise BuildError("compile failed")
 

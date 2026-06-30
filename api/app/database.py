@@ -12,6 +12,12 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.allowlist import evaluate_build_image
+from app.build_meta import (
+    bldarg_to_bldopt_string,
+    meta_lists_from_onchain,
+    parse_source_identity_from_args,
+    resolve_bldarg,
+)
 
 _BLDOPT_PACKAGE = re.compile(r"--package\s+(\S+)")
 _BLDOPT_MANIFEST = re.compile(r"--manifest-path\s+(\S+)")
@@ -74,6 +80,7 @@ class Verification(Base):
     onchain_meta: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     builder_image: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     bldopt: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    bldarg: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
     expected_wasm_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     built_wasm_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -162,9 +169,23 @@ def utcnow() -> datetime:
 def infer_metadata_source(record: Verification) -> str:
     """Whether SEP-58 build fields were read from chain or supplied by submitter."""
     meta = record.onchain_meta or {}
-    if meta.get("bldimg") or meta.get("bldopt") or meta.get("source_repo"):
+    if (
+        meta.get("bldimg")
+        or meta.get("bldopt")
+        or meta.get("bldopt_list")
+        or meta.get("bldarg")
+        or meta.get("bldarg_list")
+        or meta.get("source_repo")
+    ):
         return "onchain"
     return "supplied"
+
+
+def infer_verification_strength(record: Verification) -> str:
+    """Coarse trust tier aligned with SEP-58 on-chain vs retroactive verification."""
+    if infer_metadata_source(record) == "onchain":
+        return "sep58_onchain"
+    return "sep58_supplied"
 
 
 def infer_image_trust(record: Verification) -> str:
@@ -179,8 +200,12 @@ def infer_image_trust(record: Verification) -> str:
     return "other"
 
 
-def parse_source_identity(bldopt: Optional[str]) -> Optional[dict[str, str]]:
-    """Extract workspace contract identity from a SEP-58 bldopt string."""
+def parse_source_identity(bldopt: Optional[str], bldarg: Optional[list[str]] = None) -> Optional[dict[str, str]]:
+    """Extract workspace contract identity from SEP-58 build metadata."""
+    if bldarg:
+        identity = parse_source_identity_from_args(bldarg)
+        if identity:
+            return identity
     if not bldopt:
         return None
     package = _BLDOPT_PACKAGE.search(bldopt)
@@ -195,15 +220,31 @@ def parse_source_identity(bldopt: Optional[str]) -> Optional[dict[str, str]]:
     return out
 
 
+def resolved_bldarg(record: Verification) -> list[str]:
+    stored = list(record.bldarg or [])
+    if stored:
+        return stored
+    onchain_bldarg, onchain_bldopt = meta_lists_from_onchain(record.onchain_meta)
+    return resolve_bldarg(
+        bldarg_values=onchain_bldarg or None,
+        bldopt_values=onchain_bldopt or None,
+        bldopt=record.bldopt,
+    )
+
+
 def _trust_fields(record: Verification) -> dict[str, Any]:
-    bldopt = record.bldopt or (record.onchain_meta or {}).get("bldopt")
+    bldarg = resolved_bldarg(record)
+    bldopt = record.bldopt or bldarg_to_bldopt_string(bldarg) or (record.onchain_meta or {}).get("bldopt")
     fields: dict[str, Any] = {
         "metadata_source": infer_metadata_source(record),
+        "verification_strength": infer_verification_strength(record),
         "image_trust": infer_image_trust(record),
     }
-    identity = parse_source_identity(bldopt)
+    identity = parse_source_identity(bldopt, bldarg)
     if identity:
         fields["source_identity"] = identity
+    if bldarg:
+        fields["bldarg"] = bldarg
     return fields
 
 
@@ -227,6 +268,7 @@ def _sep58_block(record: Verification, base_url: str) -> dict[str, Any]:
         # The image the verifier actually rebuilt in (allowlisted).
         "builder_image_used": record.builder_image,
         "bldopt": record.bldopt or meta.get("bldopt"),
+        "bldarg": record.bldarg or meta.get("bldarg_list") or resolved_bldarg(record),
         "source_repo": record.source_repo if is_repo else None,
         "source_rev": record.source_commit if is_repo else None,
         "tarball_url": record.source_repo if is_hosted else None,
