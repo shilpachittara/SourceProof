@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+from app.build_meta import bldarg_to_bldopt_string, resolve_bldarg
 from app.config import settings
 from app.badge import badge_json, badge_svg
 from app.database import (
@@ -49,10 +50,13 @@ from app.storage import (
 )
 from app.wasm_meta import (
     declared_bldopt,
+    declared_bldopt_list,
+    declared_bldarg,
     declared_build_image,
     declared_source_repo,
     declared_source_rev,
-    parse_wasm_metadata,
+    parse_wasm_meta,
+    wasm_meta_to_storage_dict,
 )
 from app import allowlist
 from app.worker import run_verification_task
@@ -305,7 +309,7 @@ async def submit_verification(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        onchain_meta = parse_wasm_metadata(onchain_wasm)
+        onchain_meta = wasm_meta_to_storage_dict(parse_wasm_meta(onchain_wasm))
         auto_repo = declared_source_repo(onchain_meta)
         auto_rev = declared_source_rev(onchain_meta) or "HEAD"
         if not auto_repo:
@@ -379,12 +383,20 @@ async def submit_verification(
             ) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        onchain_meta = parse_wasm_metadata(onchain_wasm)
+        onchain_meta = wasm_meta_to_storage_dict(parse_wasm_meta(onchain_wasm))
     elif not onchain_meta:
-        onchain_meta = parse_wasm_metadata(onchain_wasm)
+        onchain_meta = wasm_meta_to_storage_dict(parse_wasm_meta(onchain_wasm))
 
     if not bldopt:
         bldopt = declared_bldopt(onchain_meta)
+
+    bldarg_list = resolve_bldarg(
+        bldarg_values=declared_bldarg(onchain_meta) or None,
+        bldopt_values=declared_bldopt_list(onchain_meta) or None,
+        bldopt=bldopt,
+    )
+    if not bldopt:
+        bldopt = bldarg_to_bldopt_string(bldarg_list)
 
     # Read the toolchain metadata the deployer embedded in the on-chain Wasm
     # (rustc / soroban-sdk versions, and any SEP-58 `bldimg`). This both explains
@@ -431,6 +443,7 @@ async def submit_verification(
         onchain_meta=onchain_meta or None,
         builder_image=chosen_image,
         bldopt=bldopt,
+        bldarg=bldarg_list,
         verifier_instance_id=settings.verifier_instance_id,
         created_at=utcnow(),
     )
@@ -497,10 +510,16 @@ async def get_contract_badge_json(
     all_records, current_wasm_hash = await _contract_lookup_records(network, contract_id, db)
     multi = aggregate_verifiers(all_records, current_wasm_hash=current_wasm_hash)
     freshness = None
+    metadata_source = None
+    verification_strength = None
     if current_wasm_hash:
         for v in multi["verifiers"]:
             if v.get("freshness"):
                 freshness = v["freshness"]
+            if v.get("metadata_source"):
+                metadata_source = v["metadata_source"]
+                verification_strength = v.get("verification_strength")
+            if freshness and metadata_source:
                 break
     return badge_json(
         network=network.lower().strip(),
@@ -508,6 +527,8 @@ async def get_contract_badge_json(
         consensus=multi["consensus"],
         freshness=freshness,
         verifier_count=multi["verifier_count"],
+        metadata_source=metadata_source,
+        verification_strength=verification_strength,
     )
 
 

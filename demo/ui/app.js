@@ -258,6 +258,9 @@ function renderConsensus(data) {
         <span class="consensus-title">Multi-verifier result</span>
         <span class="pill ${consensusPillClass(consensus)}">${label}</span>
         <span class="consensus-count">${data.verifier_count} verifier(s)</span>
+        ${data.verifiers && data.verifiers[0] && data.verifiers[0].verification_strength
+          ? `<span class="pill pill-muted">${escapeHtml(data.verifiers[0].verification_strength)}</span>`
+          : ""}
         ${renderBadgeEmbed(data.network, data.contract_id)}
       </div>
       ${chain}

@@ -62,6 +62,7 @@ def test_full_verification_flow_verified(client: TestClient, monkeypatch: pytest
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -117,6 +118,7 @@ def test_full_verification_flow_mismatch(client: TestClient, monkeypatch: pytest
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm-other",
@@ -171,7 +173,7 @@ def test_verification_not_found(client: TestClient) -> None:
 def test_list_verifications(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.builder import BuildResult
 
-    def fake_build(source_dir, output_dir, image=None, bldopt=None):
+    def fake_build(source_dir, output_dir, image=None, bldopt=None, bldarg=None):
         return BuildResult(
             wasm_bytes=b"\x00asm",
             wasm_hash=WASM_HASH_A,
@@ -202,6 +204,7 @@ def _verify_contract(client: TestClient, monkeypatch: pytest.MonkeyPatch, wasm_b
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=wasm_bytes,
@@ -254,6 +257,7 @@ def test_verified_record_exposes_build_image(client: TestClient, monkeypatch: py
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -281,6 +285,7 @@ def test_content_addressed_submission(client: TestClient, monkeypatch: pytest.Mo
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -342,6 +347,7 @@ def test_hosted_tarball_submission(client: TestClient, monkeypatch: pytest.Monke
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(wasm_bytes=b"\x00asm", wasm_hash=WASM_HASH_A, build_metadata={"docker_image": "test"})
 
@@ -381,6 +387,7 @@ def test_github_input_snapshots_to_tarball(client: TestClient, monkeypatch: pyte
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -431,6 +438,7 @@ def test_trust_fields_on_verified_record(client: TestClient, monkeypatch: pytest
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -458,6 +466,7 @@ def test_trust_fields_on_verified_record(client: TestClient, monkeypatch: pytest
     verification_id = submit.json()["verification_id"]
     payload = client.get(f"/v1/verifications/{verification_id}").json()
     assert payload["metadata_source"] == "supplied"
+    assert payload["verification_strength"] == "sep58_supplied"
     assert payload["image_trust"] in {"sdf", "allowlisted"}
     assert payload["source_identity"]["package"] == "counter"
 
@@ -467,15 +476,19 @@ def test_contract_id_only_auto_resolve(client: TestClient, monkeypatch: pytest.M
 
     tarball = make_source_tarball()
 
+    from app.wasm_meta import WasmMeta
+
     async def fake_fetch_hash(network: str, contract_id: str | None, wasm_hash: str | None):
         return WASM_HASH_A, b"\x00asm-meta"
 
-    def fake_parse(_wasm: bytes) -> dict[str, str]:
-        return {
-            "source_repo": "https://github.com/example/onchain-contract",
-            "source_rev": "deadbeef" * 5,
-            "bldopt": "--package token",
-        }
+    def fake_parse(_wasm: bytes) -> WasmMeta:
+        return WasmMeta(
+            scalars={
+                "source_repo": "https://github.com/example/onchain-contract",
+                "source_rev": "deadbeef" * 5,
+            },
+            bldopt=["--package token"],
+        )
 
     async def fake_github(repo_url: str, ref: str) -> FetchedSource:
         return FetchedSource(
@@ -490,6 +503,7 @@ def test_contract_id_only_auto_resolve(client: TestClient, monkeypatch: pytest.M
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -498,7 +512,7 @@ def test_contract_id_only_auto_resolve(client: TestClient, monkeypatch: pytest.M
         )
 
     monkeypatch.setattr("app.main.fetch_wasm_hash", fake_fetch_hash)
-    monkeypatch.setattr("app.main.parse_wasm_metadata", fake_parse)
+    monkeypatch.setattr("app.main.parse_wasm_meta", fake_parse)
     monkeypatch.setattr("app.main.fetch_from_github", fake_github)
     monkeypatch.setattr("app.worker.build_contract", fake_build)
 
@@ -512,6 +526,7 @@ def test_contract_id_only_auto_resolve(client: TestClient, monkeypatch: pytest.M
 
     record = client.get(f"/v1/verifications/{body['verification_id']}").json()
     assert record["metadata_source"] == "onchain"
+    assert record["verification_strength"] == "sep58_onchain"
     assert record["source_identity"]["package"] == "token"
 
 
@@ -521,6 +536,7 @@ def test_wasms_json_canonical_lookup(client: TestClient, monkeypatch: pytest.Mon
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -552,6 +568,7 @@ def test_idempotent_submit_returns_existing_job(
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -607,6 +624,7 @@ def test_contract_badge_json_and_svg(client: TestClient, monkeypatch: pytest.Mon
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -647,6 +665,7 @@ def test_wasm_contracts_reverse_index(client: TestClient, monkeypatch: pytest.Mo
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -699,6 +718,7 @@ def test_list_verifications_filters(client: TestClient, monkeypatch: pytest.Monk
         output_dir: Path,
         image: str | None = None,
         bldopt: str | None = None,
+        bldarg: list[str] | None = None,
     ) -> BuildResult:
         return BuildResult(
             wasm_bytes=b"\x00asm",
@@ -759,3 +779,35 @@ def test_rate_limit_structured_error(client: TestClient, monkeypatch: pytest.Mon
     detail = second.json()["detail"]
     assert detail["code"] == "rate_limited"
     assert second.headers.get("retry-after")
+
+
+def test_sep58_block_includes_bldarg(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_build(
+        source_dir: Path,
+        output_dir: Path,
+        image: str | None = None,
+        bldopt: str | None = None,
+        bldarg: list[str] | None = None,
+    ) -> BuildResult:
+        return BuildResult(
+            wasm_bytes=b"\x00asm",
+            wasm_hash=WASM_HASH_A,
+            build_metadata={"docker_image": "test"},
+        )
+
+    monkeypatch.setattr("app.worker.build_contract", fake_build)
+
+    tarball = make_source_tarball()
+    submit = client.post(
+        "/v1/verify",
+        data={
+            "network": "testnet",
+            "wasm_hash": WASM_HASH_A,
+            "contract_id": "CBLDARG1",
+            "bldopt": "--package counter",
+        },
+        files={"source": ("source.tar.gz", tarball, "application/gzip")},
+    )
+    payload = client.get(f"/v1/verifications/{submit.json()['verification_id']}").json()
+    assert payload["sep58"]["bldarg"][:2] == ["contract", "build"]
+    assert payload["bldarg"][:2] == ["contract", "build"]

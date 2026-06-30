@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 
 def badge_json(
@@ -12,11 +12,18 @@ def badge_json(
     consensus: str,
     freshness: str | None,
     verifier_count: int,
+    metadata_source: Optional[str] = None,
+    verification_strength: Optional[str] = None,
 ) -> dict[str, Any]:
     verified = consensus == "verified" and freshness != "superseded"
-    label = "Source verified" if verified else consensus.replace("_", " ").title()
-    if freshness == "superseded":
+    if verified and verification_strength == "sep58_supplied":
+        label = "Source verified (supplied meta)"
+    elif verified:
+        label = "Source verified"
+    elif consensus == "verified" and freshness == "superseded":
         label = "Verification superseded"
+    else:
+        label = consensus.replace("_", " ").title()
     return {
         "network": network,
         "contract_id": contract_id,
@@ -25,6 +32,8 @@ def badge_json(
         "verified": verified,
         "label": label,
         "verifier_count": verifier_count,
+        "metadata_source": metadata_source,
+        "verification_strength": verification_strength,
     }
 
 

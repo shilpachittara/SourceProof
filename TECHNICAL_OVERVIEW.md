@@ -74,7 +74,8 @@ soroban-verify/
 │   │   ├── sources.py       # SEP-58 source resolver: github / hosted / ipfs / hash-only
 │   │   ├── storage.py       # content-addressed tarball store + file listing
 │   │   ├── rpc.py           # Stellar RPC / CLI fallback → on-chain Wasm + hash
-│   │   ├── wasm_meta.py     # parse contractmetav0 (rsver / rssdkver / bldimg)
+│   │   ├── wasm_meta.py     # parse contractmetav0 (rsver / rssdkver / bldimg / bldarg)
+│   │   ├── build_meta.py    # SEP-58 bldarg/bldopt normalization and package validation
 │   │   ├── allowlist.py     # digest-pinned trusted builder images
 │   │   ├── ratelimit.py     # per-IP sliding-window limiter
 │   │   ├── database.py      # models, trust levels, sep58 block, aggregate_verifiers()
@@ -346,6 +347,15 @@ Client errors use a structured `detail` object: `{ "code": "<machine_id>", "mess
 | `failed` | Build error, invalid tarball, timeout, or RPC error (`error_message`) |
 
 Freshness is recomputed on every read by re-fetching the live on-chain hash: `current` (still matches) vs `superseded` (contract upgraded since verification).
+
+Each verification also exposes trust signals aligned with the #1923 / #1945 discussions:
+
+| Field | Meaning |
+|---|---|
+| `metadata_source` | `onchain` — SEP-58 fields read from wasm meta; `supplied` — retroactive/out-of-band submit |
+| `verification_strength` | `sep58_onchain` (stronger) vs `sep58_supplied` (weaker, retroactive path) |
+| `source_identity` | Parsed `--package` / `--manifest-path` from ordered `bldarg` |
+| `bldarg` | Ordered build arguments replayed in the pinned Docker image (SEP-58 #1965 direction) |
 
 ## 10. Source Input Resolution (SEP-58)
 
